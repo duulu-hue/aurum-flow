@@ -503,7 +503,11 @@ const AF = (() => {
         }
       }
     }
-    if (!loc.pts) loc.detail = `Price ${f(b.c)} sits between VAL ${f(prof.val)} and VAH ${f(prof.vah)}. The middle is not an edge.`;
+    if (!loc.pts) {
+      if (b.c > prof.vah) loc.detail = `Price ${f(b.c)} is above value (VAH ${f(prof.vah)}). ${up ? 'Longs wait for a pullback to value or VWAP.' : 'Shorts need a failed push that closes back below VAH.'}`;
+      else if (b.c < prof.val) loc.detail = `Price ${f(b.c)} is below value (VAL ${f(prof.val)}). ${up ? 'Longs need a failed push that closes back above VAL.' : 'Shorts wait for a pullback to value or VWAP.'}`;
+      else loc.detail = `Price ${f(b.c)} sits between VAL ${f(prof.val)} and VAH ${f(prof.vah)}. The middle is not an edge.`;
+    }
 
     // 4. Order flow
     const flow = { key: 'flow', label: 'Order flow', max: 15, pts: 0, detail: '' };
@@ -1096,6 +1100,7 @@ const AF = (() => {
       for (let j = S.trades.length - 1; j >= 0; j--) {
         const t = S.trades[j], ex = t.exitIdx !== null ? t.exitIdx : total() - 1 + 6;
         if (ex < i0) break; if (t.k > i1) continue;
+        ctx.globalAlpha = (live && t.k < S.liveFrom) ? 0.35 : 1;
         const xa = xOf(t.k), xb = Math.min(plot.x + plot.w, xOf(ex));
         const ye = yOf(t.entry), ysl = yOf(t.sl0), yt2 = yOf(t.tp2), yt1 = yOf(t.tp1);
         ctx.fillStyle = 'rgba(51,195,160,.12)'; ctx.fillRect(xa, Math.min(ye, yt2), xb - xa, Math.abs(yt2 - ye));
@@ -1106,6 +1111,7 @@ const AF = (() => {
         const b = getBar(t.k), ay = t.dir > 0 ? yOf(b.l) + 14 : yOf(b.h) - 14;
         ctx.fillStyle = t.dir > 0 ? C.up : C.down; ctx.beginPath();
         ctx.moveTo(xa, ay - 6 * t.dir); ctx.lineTo(xa - 5, ay + 3 * t.dir); ctx.lineTo(xa + 5, ay + 3 * t.dir); ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -1147,7 +1153,8 @@ const AF = (() => {
       ctx.fillText(txt || fmt(p), plot.x + plot.w + 5, y);
     };
     if (prof) { tag(prof.vah, '#2a2a22', C.gold, 'VAH'); tag(prof.val, '#2a2a22', C.gold, 'VAL'); tag(prof.poc, '#4a3c18', C.gold, 'POC'); }
-    if (S.active) { tag(S.active.tp2, '#16362f', C.up, 'TP2'); tag(S.active.tp1, '#16362f', C.up, 'TP1'); tag(S.active.sl, '#3a1d1c', C.down, 'SL'); }
+    const at = live ? openSignal() : S.active;
+    if (at) { tag(at.tp2, '#16362f', C.up, 'TP2'); tag(at.tp1, '#16362f', C.up, 'TP1'); tag(at.sl, '#3a1d1c', C.down, 'SL'); }
     const lp = lastPrice(), lb = getBar(total() - 1);
     tag(lp, lb.c >= lb.o ? C.up : C.down, '#06110d');
     if (hover && hover.y < plot.y + plot.h) tag(g.pOf(hover.y), '#2b3a57', C.fg);
@@ -1430,6 +1437,12 @@ const AF = (() => {
   }
   function notify(kind, t) { if (live) tg(sigText(kind, t)); }
 
+  // a trade the engine opened on history must not block or decorate the live record
+  function clearHistoryActive(N) {
+    const a = N.active;
+    if (a && (N.liveFrom === undefined || a.k < N.liveFrom)) { a.status = 'Open when history ended'; a.exitIdx = Math.max(a.k, N.bars.length - 1); N.active = null; N.cooldownUntil = 0; }
+  }
+
   // ---------------- Binance USDⓈ-M XAUUSDT feed
   const SYMBOL = 'XAUUSDT', sym = 'xauusdt', REST = 'https://fapi.binance.com';
   const WS_PUBLIC = 'wss://fstream.binance.com/public/stream?streams=', WS_MARKET = 'wss://fstream.binance.com/market/stream?streams=';
@@ -1552,6 +1565,7 @@ const AF = (() => {
       AF.closeBar(S, { t, o, h, l, c, v, bv: tbv, sv: v - tbv, pv: tp * v, p2v: v * (tp * tp + rg * rg / 12), fp: null, book: null });
     }
     S.liveFrom = S.bars.length;
+    clearHistoryActive(S);
     if (curK) {
       newBar(curK.t, curK.o);
       const b = S.cur, tp = (curK.h + curK.l + curK.c) / 3, rg = curK.h - curK.l;
@@ -1728,7 +1742,7 @@ const AF = (() => {
   // ---------------- controls shared with the sim build
   $('#thr').oninput = e => { S.params.threshold = +e.target.value; $('#thrv').textContent = e.target.value; S.lastEval = reEval(); panelDirty = true; };
   $('#lookback').onchange = e => { S.params.lookback = +e.target.value; S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
-  const keepLive = N => { N.liveFrom = S.liveFrom; N.cur = S.cur; N.liveBook = S.liveBook; return N; };
+  const keepLive = N => { N.liveFrom = S.liveFrom; N.cur = S.cur; N.liveBook = S.liveBook; clearHistoryActive(N); return N; };
   $('#rerun').onclick = () => { S = keepLive(AF.rebuild(S)); afterRebuild(); };
   const readParams = P => { P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; };
   $('#trigMode').onchange = $('#useHTF').onchange = () => { readParams(S.params); S = keepLive(AF.rebuild(S)); afterRebuild(); };
