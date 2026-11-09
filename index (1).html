@@ -1,0 +1,1791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Aurum Flow Live</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: trading terminal. Chart dominates the left; the engine's verdict reads top-down on the right; journal below. Single dark look by choice. */
+:root{
+  --bg:#0a0f19; --panel:#111a29; --panel-2:#16213a; --line:#22314b; --fg:#e3e8f1; --muted:#8a97af; --faint:#5b6883;
+  --gold:#e2b349; --gold-soft:rgba(226,179,73,.14); --up:#33c3a0; --up-soft:rgba(51,195,160,.14); --down:#ee6a5a; --down-soft:rgba(238,106,90,.14);
+  --f-display:"Barlow Semi Condensed","Arial Narrow",system-ui,sans-serif; --f-body:"Barlow",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0}
+img{max-width:100%}
+html,body{background:var(--bg);color:var(--fg)}
+body{font-family:var(--f-body);font-size:14px;line-height:1.45;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 32px}
+button,select,input{font:inherit;color:inherit}
+.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding-block:6px 12px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:8px;font-family:var(--f-display);font-weight:700;font-size:20px;letter-spacing:.02em}
+.brand svg{width:22px;height:22px}
+.instr{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sym{font-family:var(--f-display);font-weight:600;font-size:17px}
+.chip{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.chip.sim{color:var(--gold);border-color:rgba(226,179,73,.4);background:var(--gold-soft)}
+.quote{display:flex;align-items:baseline;gap:8px}
+.px{font-family:var(--f-mono);font-size:22px;font-weight:500}
+.chg{font-family:var(--f-mono);font-size:13px}
+.up{color:var(--up)} .down{color:var(--down)} .muted{color:var(--muted)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.btn,select{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer}
+.btn:hover,select:hover{border-color:#34476a}
+.btn:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.btn.primary{background:var(--gold);color:#1a1405;border-color:var(--gold);font-weight:600}
+.file{position:relative;overflow:hidden}
+.file input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 352px;gap:14px;margin-top:14px}
+@media (max-width:1020px){.grid{grid-template-columns:minmax(0,1fr)}}
+.chartwrap{min-width:0;align-self:start;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)}
+.tog{background:transparent;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted);cursor:pointer}
+.tog[aria-pressed="true"]{color:var(--fg);border-color:rgba(226,179,73,.55);background:var(--gold-soft)}
+.toolbar .sep{flex:1}
+.toolbar select{padding:3px 8px;font-size:12px}
+.canvasbox{position:relative;height:560px}
+@media (max-width:640px){.canvasbox{height:430px}}
+canvas#chart{display:block;width:100%;height:100%;touch-action:pan-y;cursor:crosshair}
+.legend{position:absolute;left:10px;top:8px;font-family:var(--f-mono);font-size:11px;color:var(--muted);pointer-events:none;display:flex;gap:10px;flex-wrap:wrap;max-width:calc(100% - 90px)}
+.legend b{color:var(--fg);font-weight:500}
+.hint{position:absolute;right:76px;bottom:30px;font-size:11px;color:var(--faint);pointer-events:none}
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+.card h3{margin:0 0 10px;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.sig-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.pill{font-family:var(--f-display);font-weight:700;font-size:13px;letter-spacing:.08em;padding:3px 10px;border-radius:4px}
+.pill.long{background:var(--up-soft);color:var(--up)} .pill.short{background:var(--down-soft);color:var(--down)} .pill.flat{background:var(--panel-2);color:var(--muted)}
+.sig-title{font-family:var(--f-display);font-weight:600;font-size:18px;line-height:1.2;text-wrap:balance}
+.levels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+.lv{background:var(--panel-2);border-radius:6px;padding:8px 10px;min-width:0}
+.lv span{display:block;font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.lv b{font-family:var(--f-mono);font-weight:500;font-size:15px}
+.lv small{display:block;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.narr{font-size:13.5px;color:#c9d1df;margin:0}
+.watch{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.watch li{font-size:13px;padding-left:12px;border-left:2px solid var(--line)}
+.watch li.l{border-color:var(--up)} .watch li.s{border-color:var(--down)}
+.meter{display:grid;grid-template-columns:44px minmax(0,1fr) 34px;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+.bar{position:relative;height:8px;background:var(--panel-2);border-radius:4px;overflow:visible}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
+.bar .thr{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--gold)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:6px 0 10px}
+.seg button{background:transparent;border:0;padding:4px 12px;font-size:12px;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--panel-2);color:var(--fg)}
+.factors{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.factors li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;font-size:12.5px}
+.factors .fl{font-weight:600}
+.factors .fp{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.factors .fp.on{color:var(--gold)}
+.factors .fd{grid-column:1/-1;color:var(--muted);font-size:12px}
+.thrrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:12px;flex-wrap:wrap}
+.thrrow input[type=range]{flex:1;min-width:120px;accent-color:var(--gold)}
+dl.read{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;font-size:12.5px}
+dl.read dt{color:var(--muted)} dl.read dd{margin:0;text-align:right;font-family:var(--f-mono);font-size:12px}
+.dom{font-family:var(--f-mono);font-size:11.5px;display:flex;flex-direction:column;gap:1px}
+.dom .r{display:grid;grid-template-columns:1fr 74px 1fr;align-items:center;height:17px}
+.dom .r .p{text-align:center;color:var(--muted)}
+.dom .r.mid .p{color:var(--gold)}
+.dom .b,.dom .a{position:relative;height:13px}
+.dom .b i{position:absolute;right:0;top:0;bottom:0;background:var(--up-soft);border-right:2px solid rgba(51,195,160,.6)}
+.dom .a i{position:absolute;left:0;top:0;bottom:0;background:var(--down-soft);border-left:2px solid rgba(238,106,90,.6)}
+.dom .b em,.dom .a em{position:absolute;top:0;font-style:normal;font-size:10.5px;color:var(--muted);line-height:13px}
+.dom .b em{right:6px} .dom .a em{left:6px}
+.dom .wall em{color:var(--gold);font-weight:500}
+.lower{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.tabs{display:flex;gap:4px;padding:8px 10px 0;border-bottom:1px solid var(--line)}
+.tab{background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 12px;font-family:var(--f-display);font-weight:600;font-size:14px;color:var(--muted);cursor:pointer}
+.tab[aria-selected="true"]{color:var(--fg);border-color:var(--gold)}
+.pane{padding:16px}
+.notice{font-size:12.5px;color:var(--gold);background:var(--gold-soft);border:1px solid rgba(226,179,73,.3);border-radius:6px;padding:8px 12px;margin-bottom:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--panel-2);border-radius:6px;padding:10px 12px}
+.stat span{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.stat b{font-family:var(--f-mono);font-weight:500;font-size:18px}
+.eqbox{height:140px;margin-bottom:14px;position:relative}
+.eqbox canvas{width:100%;height:100%;display:block}
+.tablewrap{overflow-x:auto;max-height:420px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:860px}
+th{position:sticky;top:0;background:var(--panel);text-align:left;font-weight:600;color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid rgba(34,49,75,.6);white-space:nowrap}
+td.num,th.num{text-align:right}
+tr.open td{background:var(--gold-soft)}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.rules section{min-width:0}
+.rules h4{margin:0 0 6px;font-family:var(--f-display);font-weight:600;font-size:16px}
+.rules p,.rules li{font-size:13px;color:#c3cbda;max-width:65ch}
+.rules ul{padding-left:18px;margin:6px 0}
+.rules .w{font-family:var(--f-mono);color:var(--gold);font-size:12px}
+.err{color:var(--down);font-size:12.5px}
+.chip.feed{color:var(--muted)} .chip.feed.ok{color:var(--up);border-color:rgba(51,195,160,.45);background:var(--up-soft)} .chip.feed.warn{color:var(--gold);border-color:rgba(226,179,73,.45);background:var(--gold-soft)} .chip.feed.bad{color:var(--down);border-color:rgba(238,106,90,.45);background:var(--down-soft)}
+.feednote{font-size:12.5px;color:var(--gold);margin:10px 0 0}
+.setup{margin-top:14px}
+.setup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+.setcol{min-width:0;display:flex;flex-direction:column;gap:10px}
+.setcol h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.frow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.frow label{color:var(--muted);min-width:140px}
+.frow input:not([type=checkbox]){flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px}
+.frow .chk{display:flex;align-items:center;gap:6px;color:var(--fg);min-width:0}
+.frow .chk input{accent-color:var(--gold)}
+.hintp{font-size:12.5px;color:var(--muted);margin:0;max-width:65ch}
+.steps{margin:0;padding-left:18px;font-size:12.5px;color:#c3cbda;display:flex;flex-direction:column;gap:4px}
+.mt5{font-size:12.5px;color:var(--muted);margin:0 0 10px;font-family:var(--f-mono)}
+.mt5 b{color:var(--fg);font-weight:500}
+.jbar{display:flex;justify-content:flex-end;margin:-6px 0 12px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18" stroke="#5b6883" stroke-width="1.5"/><rect x="5" y="9" width="3" height="7" rx=".5" fill="#33c3a0"/><rect x="10.5" y="5" width="3" height="11" rx=".5" fill="#e2b349"/><rect x="16" y="11" width="3" height="5" rx=".5" fill="#ee6a5a"/></svg>
+    Aurum Flow
+  </div>
+  <div class="instr">
+    <span class="sym" id="sym">XAUUSD</span>
+    <span class="chip" id="tf">1m · HTF 15m</span>
+    <span class="chip feed" id="src">Connecting…</span>
+  </div>
+  <div class="quote"><span class="px" id="px">–</span><span class="chg" id="chg"></span></div>
+  <div class="controls">
+    <button class="btn primary" id="share" type="button">Share signal</button>
+    <button class="btn" id="setupBtn" type="button" aria-expanded="false" aria-controls="setup">Setup</button>
+    <label class="btn file">Backtest a CSV<input type="file" id="csv" accept=".csv,.txt,.tsv"></label>
+    <button class="btn" id="toLive" type="button" hidden>Back to live</button>
+  </div>
+</header>
+<p class="err" id="err" hidden></p>
+<p class="feednote" id="feedNote" hidden></p>
+
+<section class="card setup" id="setup" hidden>
+  <div class="setup-grid">
+    <div class="setcol">
+      <h3>MT5 price match</h3>
+      <p class="hintp">Binance gold and your broker's XAUUSD differ by a little. Match them once so every signal also shows levels for your MT5 chart.</p>
+      <div class="frow"><label for="broker">Broker</label><select id="broker"><option>Exness</option><option>Valetax</option><option>Other</option></select></div>
+      <div class="frow"><label for="mt5px">Your MT5 price now</label><input id="mt5px" inputmode="decimal" placeholder="e.g. 4172.85" autocomplete="off"><button class="btn" id="calib" type="button">Match</button></div>
+      <p class="hintp">Offset: <b class="num" id="offv">+0.00</b>. <span id="calMsg">Read the bid on your demo MT5 and press Match while price is steady.</span></p>
+      <div class="frow"><label for="cost">Costs per trade (pips)</label><input id="cost" inputmode="decimal" style="max-width:90px" autocomplete="off"></div>
+    </div>
+    <div class="setcol">
+      <h3>Telegram alerts</h3>
+      <ol class="steps"><li>In Telegram, open <b>@BotFather</b>, send <span class="num">/newbot</span>, and copy the token it gives you.</li><li>Open your new bot and press <b>Start</b>.</li><li>Paste the token here and press <b>Find my chat ID</b>.</li></ol>
+      <div class="frow"><label for="tgToken">Bot token</label><input id="tgToken" type="password" autocomplete="off"></div>
+      <div class="frow"><label for="tgChat">Chat ID</label><input id="tgChat" autocomplete="off"><button class="btn" id="tgFind" type="button">Find my chat ID</button></div>
+      <div class="frow"><label class="chk"><input type="checkbox" id="tgOn"> Send every signal to Telegram</label><button class="btn" id="tgTest" type="button">Send test</button></div>
+      <p class="hintp" id="tgMsg">The token is stored in this browser only.</p>
+    </div>
+  </div>
+</section>
+
+<div class="grid">
+  <section class="chartwrap">
+    <div class="toolbar">
+      <button class="tog" data-layer="heat" aria-pressed="true" type="button">Heatmap</button>
+      <button class="tog" data-layer="vwap" aria-pressed="true" type="button">VWAP ±σ</button>
+      <button class="tog" data-layer="prof" aria-pressed="true" type="button">Volume profile</button>
+      <button class="tog" data-layer="frac" aria-pressed="true" type="button">Fractals</button>
+      <button class="tog" data-layer="trades" aria-pressed="true" type="button">Trades</button>
+      <button class="tog" data-layer="delta" aria-pressed="true" type="button">Delta</button>
+      <span class="sep"></span>
+      <select id="profMode" aria-label="Volume profile range">
+        <option value="engine">Profile: engine window</option><option value="session">Profile: session</option><option value="custom">Profile: custom range</option>
+      </select>
+      <button class="tog" id="selRange" aria-pressed="false" type="button">Select range</button>
+      <button class="tog" id="zoomOut" type="button" aria-label="Zoom out">−</button>
+      <button class="tog" id="zoomIn" type="button" aria-label="Zoom in">+</button>
+      <button class="tog" id="live" type="button">Live</button>
+    </div>
+    <div class="canvasbox">
+      <canvas id="chart"></canvas>
+      <div class="legend" id="legend"></div>
+      <div class="hint" id="hint">Drag to pan · wheel to zoom · double-click for live</div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="card" id="sigCard"></div>
+    <div class="card">
+      <h3>Confluence</h3>
+      <div id="meters"></div>
+      <div class="seg" role="group" aria-label="Show case">
+        <button type="button" id="caseL" aria-pressed="true">Long case</button><button type="button" id="caseS" aria-pressed="false">Short case</button>
+      </div>
+      <ul class="factors" id="factors"></ul>
+      <div class="thrrow">
+        <label for="thr">Signal threshold</label><input type="range" id="thr" min="40" max="90" step="5" value="65"><b class="num" id="thrv">65</b>
+      </div>
+      <div class="thrrow">
+        <label for="lookback">Value lookback</label>
+        <select id="lookback"><option value="60">60 bars</option><option value="120" selected>120 bars</option><option value="240">240 bars</option></select>
+        <button class="btn" id="rerun" type="button">Re-run history</button>
+      </div>
+      <div class="thrrow">
+        <label for="trigMode">Entry trigger</label>
+        <select id="trigMode"><option value="flow" selected>Order flow only</option><option value="fractal">Fractal sweep</option></select>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useHTF" checked style="accent-color:var(--gold)"> HTF structure</label>
+      </div>
+    </div>
+    <div class="card"><h3>Market read</h3><dl class="read" id="read"></dl></div>
+    <div class="card" id="domCard"><h3>Depth of market</h3><div class="dom" id="dom"></div></div>
+  </aside>
+</div>
+
+<section class="lower">
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="journal" type="button">Live signals</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="rules" type="button">Engine rules</button>
+  </div>
+  <div class="pane" id="pane-journal">
+    <div class="notice" id="notice"></div>
+    <div class="jbar"><button class="btn" id="csvOut" type="button">Download journal (CSV)</button></div>
+    <div class="stats" id="stats"></div>
+    <div class="eqbox"><canvas id="eq"></canvas></div>
+    <div class="tablewrap"><table><thead><tr><th>#</th><th>Time</th><th>Side</th><th>Setup</th><th class="num">Score</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Pips</th><th>Outcome</th></tr></thead><tbody id="tbody"></tbody></table></div>
+  </div>
+  <div class="pane" id="pane-rules" hidden>
+    <div class="rules">
+      <section>
+        <h4>How a signal fires</h4>
+        <p>At every bar close the engine scores a long case and a short case out of 100. A signal fires only when all of these hold:</p>
+        <ul><li>Price is at an edge (location points above zero).</li><li>A trigger printed on this bar: a fractal sweep and reclaim, or a structure shift.</li><li>TP1 pays at least 1.0R and the stop is no wider than 4× ATR.</li><li>The score clears the threshold you set.</li></ul>
+        <p>Factors without data (the order book on OHLCV files) drop out and the score is rescaled.</p>
+      </section>
+      <section>
+        <h4>Location <span class="w">25</span></h4>
+        <p>Fixed-range volume profile over the lookback window: POC, and a 70% value area grown out from the POC. Full points when price tests VAL (longs) or VAH (shorts), or stretches to the VWAP ±2σ band. 18 for ±1σ. 14 for a pullback that holds the POC or VWAP inside a higher-timeframe trend.</p>
+      </section>
+      <section>
+        <h4>Trigger <span class="w">20</span></h4>
+        <p>Williams fractals (5 bars, confirmed two bars later, so they never repaint) mark swing liquidity on the base and higher timeframes. 20 for sweeping a higher-timeframe fractal and closing back inside, 17 for a base fractal, 15 for a change of character.</p>
+        <p>Switch the entry trigger to <b>Order flow only</b> to drop fractals: the engine then enters at the edge when absorption or delta divergence prints, and the stop goes beyond the bar extreme. Changing the trigger or the HTF switch replays the whole history so the journals are comparable.</p>
+      </section>
+      <section>
+        <h4>Order book <span class="w">15</span></h4>
+        <p>A wall is a level with at least 3× the median resting size. 10 when a wall on your side has rested for 6 of the last 10 bars, 4 when it is fresh and could be a spoof. 5 more when no opposite wall of 4× median sits between entry and TP1.</p>
+      </section>
+      <section>
+        <h4>Order flow <span class="w">15</span></h4>
+        <p>15 for absorption: at least 55% aggressive volume against you, yet the bar closes in your half. 10 for delta divergence at a new extreme. 8 for a delta flip. On OHLCV files, a volume spike with a rejection close stands in.</p>
+      </section>
+      <section>
+        <h4>Structure and room <span class="w">15 + 10</span></h4>
+        <p>15 when the higher-timeframe fractal structure (last break of a swing) agrees, 7 when it is undecided. Room scores 10 at 1.5R or more to TP1, 6 at 1.0R.</p>
+      </section>
+      <section>
+        <h4>Trade management</h4>
+        <p>Stop goes beyond the swept fractal or the bar extreme, never closer than 0.8× ATR, so it sits outside the noise. TP1 is the nearer of POC and VWAP; TP2 is the far value edge, a σ band or an untaken swing. Half is banked at TP1 and the stop moves to breakeven. Trades time out after 240 bars. If a bar touches both stop and target, the journal counts the stop.</p>
+        <p>Pips on gold: 1 pip = $0.10. Losses are counted in pips too, so net pips is real.</p>
+      </section>
+    </div>
+  </div>
+</section>
+
+<script>
+// ===================== Aurum Flow engine (pure logic, no DOM) =====================
+const AF = (() => {
+  const TPB = 24; // simulated ticks per 1m bar
+
+  function randn() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  function median(a) { const s = Array.from(a).sort((x, y) => x - y); return s[s.length >> 1] || 0; }
+
+  function intervalLabel(ms) {
+    if (ms < 3600e3) return Math.round(ms / 60000) + 'm';
+    if (ms < 86400e3) return Math.round(ms / 3600e3) + 'H';
+    return Math.round(ms / 86400e3) + 'D';
+  }
+
+  // ---------------------------------------------------------------- store
+  function createStore(o) {
+    return {
+      opts: o, mode: o.mode, symbol: o.symbol, BIN: o.bin, pip: o.pip, dec: o.dec,
+      interval: o.interval, htfMult: o.htfMult,
+      tfLabel: intervalLabel(o.interval), htfLabel: intervalLabel(o.interval * o.htfMult),
+      hasBook: o.mode !== 'csv', hasFlow: o.mode !== 'csv',
+      bars: [], cur: null, liveBook: null,
+      atr: [], vwap: [], vsd: [], sessStart: [], delta: [], cvd: [],
+      sess: { id: null, pv: 0, p2v: 0, v: 0, start: 0 },
+      swings: [], ltf: { trend: 'none', lastH: null, lastL: null }, ltfEvents: [],
+      htfBars: [], htfCur: null, htfSwings: [], htf: { trend: 'none', lastH: null, lastL: null }, htfEvents: [],
+      trades: [], active: null, cooldownUntil: 0, lastEval: null,
+      params: { threshold: 65, lookback: 120, minRR: 1.0, trigger: 'fractal', useHTF: true }
+    };
+  }
+
+  function sessionKey(t, interval) {
+    if (interval < 3600e3) return Math.floor(t / 86400e3);
+    if (interval < 86400e3) return Math.floor((t / 86400e3 + 3) / 7);
+    return 0;
+  }
+
+  function addSwing(list, st, s) { list.push(s); if (s.type === 'H') st.lastH = s; else st.lastL = s; }
+
+  function markTaken(list, bar, k, depth) {
+    for (let j = list.length - 1, n = 0; j >= 0 && n < depth; j--, n++) {
+      const s = list[j];
+      if (s.taken !== null || s.conf >= k) continue;
+      if (s.type === 'H' && bar.h > s.price) s.taken = k;
+      if (s.type === 'L' && bar.l < s.price) s.taken = k;
+    }
+  }
+
+  function structure(st, close, idx) {
+    let ev = null;
+    if (st.lastH && st.lastH.broken === null && close > st.lastH.price) {
+      st.lastH.broken = idx;
+      ev = { type: st.trend === 'down' ? 'CHoCH' : 'BOS', dir: 1, idx, price: st.lastH.price, from: st.lastH.i };
+      st.trend = 'up';
+    } else if (st.lastL && st.lastL.broken === null && close < st.lastL.price) {
+      st.lastL.broken = idx;
+      ev = { type: st.trend === 'up' ? 'CHoCH' : 'BOS', dir: -1, idx, price: st.lastL.price, from: st.lastL.i };
+      st.trend = 'down';
+    }
+    return ev;
+  }
+
+  function finalizeHTF(S, hb, k) {
+    S.htfBars.push(hb); S.htfCur = null;
+    const j = S.htfBars.length - 1, B = S.htfBars;
+    if (j >= 4) {
+      const i = j - 2, h = B[i].h, l = B[i].l;
+      if (h > B[i - 1].h && h > B[i - 2].h && h >= B[i + 1].h && h >= B[i + 2].h)
+        addSwing(S.htfSwings, S.htf, { i: B[i].hIdx, price: h, type: 'H', conf: k, taken: null, broken: null, tf: 'H' });
+      if (l < B[i - 1].l && l < B[i - 2].l && l <= B[i + 1].l && l <= B[i + 2].l)
+        addSwing(S.htfSwings, S.htf, { i: B[i].lIdx, price: l, type: 'L', conf: k, taken: null, broken: null, tf: 'H' });
+    }
+    const ev = structure(S.htf, hb.c, k);
+    if (ev) S.htfEvents.push(ev);
+  }
+
+  function aggregateHTF(S, bar, k) {
+    const len = S.interval * S.htfMult, key = Math.floor(bar.t / len);
+    if (S.htfCur && S.htfCur.key !== key) finalizeHTF(S, S.htfCur, k);
+    let hb = S.htfCur;
+    if (!hb) hb = S.htfCur = { key, t: key * len, o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v, hIdx: k, lIdx: k, i0: k };
+    else {
+      if (bar.h > hb.h) { hb.h = bar.h; hb.hIdx = k; }
+      if (bar.l < hb.l) { hb.l = bar.l; hb.lIdx = k; }
+      hb.c = bar.c; hb.v += bar.v;
+    }
+    if (bar.t + S.interval >= (key + 1) * len) { hb.i1 = k; finalizeHTF(S, hb, k); }
+  }
+
+  // ---------------------------------------------------------------- bar close pipeline
+  function closeBar(S, bar) {
+    const k = S.bars.length; S.bars.push(bar);
+    const prev = k ? S.bars[k - 1] : null;
+
+    const key = sessionKey(bar.t, S.interval);
+    if (key !== S.sess.id) S.sess = { id: key, pv: 0, p2v: 0, v: 0, start: k };
+    S.sess.pv += bar.pv; S.sess.p2v += bar.p2v; S.sess.v += bar.v;
+    const vw = S.sess.v > 0 ? S.sess.pv / S.sess.v : bar.c;
+    S.vwap[k] = vw;
+    S.vsd[k] = Math.sqrt(Math.max(0, S.sess.v > 0 ? S.sess.p2v / S.sess.v - vw * vw : 0));
+    S.sessStart[k] = S.sess.start;
+
+    const tr = prev ? Math.max(bar.h - bar.l, Math.abs(bar.h - prev.c), Math.abs(bar.l - prev.c)) : bar.h - bar.l;
+    S.atr[k] = k === 0 ? tr : (k < 14 ? (S.atr[k - 1] * k + tr) / (k + 1) : (S.atr[k - 1] * 13 + tr) / 14);
+    S.delta[k] = bar.bv - bar.sv;
+    S.cvd[k] = (k ? S.cvd[k - 1] : 0) + S.delta[k];
+
+    if (k >= 4) {
+      const B = S.bars, i = k - 2, h = B[i].h, l = B[i].l;
+      if (h > B[i - 1].h && h > B[i - 2].h && h >= B[i + 1].h && h >= B[i + 2].h)
+        addSwing(S.swings, S.ltf, { i, price: h, type: 'H', conf: k, taken: null, broken: null, tf: 'L' });
+      if (l < B[i - 1].l && l < B[i - 2].l && l <= B[i + 1].l && l <= B[i + 2].l)
+        addSwing(S.swings, S.ltf, { i, price: l, type: 'L', conf: k, taken: null, broken: null, tf: 'L' });
+    }
+    markTaken(S.swings, bar, k, 60);
+    markTaken(S.htfSwings, bar, k, 24);
+    const ev = structure(S.ltf, bar.c, k);
+    if (ev) S.ltfEvents.push(ev);
+    aggregateHTF(S, bar, k);
+
+    if (S.active && S.active.k < k) manage(S, k);
+    const e = evaluate(S, k);
+    S.lastEval = e;
+    if (!S.active && k >= S.cooldownUntil && e.pick) openTrade(S, e, k);
+  }
+
+  // ---------------------------------------------------------------- fixed-range volume profile
+  function profile(S, i0, i1) {
+    i0 = Math.max(0, i0); i1 = Math.min(S.bars.length - 1, i1);
+    if (i1 < i0) return null;
+    const BIN = S.BIN, m = new Map(); let total = 0;
+    for (let i = i0; i <= i1; i++) {
+      const b = S.bars[i];
+      if (b.fp) {
+        for (const [bin, f] of b.fp) { const v = f[0] + f[1]; m.set(bin, (m.get(bin) || 0) + v); total += v; }
+      } else {
+        const lo = Math.round(b.l / BIN), hi = Math.round(b.h / BIN), n = hi - lo + 1, per = b.v / n;
+        for (let x = lo; x <= hi; x++) m.set(x, (m.get(x) || 0) + per);
+        total += b.v;
+      }
+    }
+    if (!m.size || total <= 0) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const kk of m.keys()) { if (kk < lo) lo = kk; if (kk > hi) hi = kk; }
+    const arr = new Float64Array(hi - lo + 1);
+    for (const [kk, v] of m) arr[kk - lo] = v;
+    let poc = 0;
+    for (let j = 1; j < arr.length; j++) if (arr[j] > arr[poc]) poc = j;
+    let a = poc, b = poc, acc = arr[poc];
+    const target = total * 0.7;
+    while (acc < target && (a > 0 || b < arr.length - 1)) {
+      const up = b < arr.length - 1 ? arr[b + 1] : -1, dn = a > 0 ? arr[a - 1] : -1;
+      if (up >= dn) { b++; acc += arr[b]; } else { a--; acc += arr[a]; }
+    }
+    const P = j => (lo + j) * BIN;
+    // HVN / LVN from a lightly smoothed profile
+    const sm = arr.map((v, j) => (v + (arr[j - 1] || v) + (arr[j + 1] || v)) / 3);
+    const mean = total / arr.length, hvn = [], lvn = [];
+    for (let j = 2; j < sm.length - 2; j++) {
+      if (sm[j] > sm[j - 1] && sm[j] >= sm[j + 1] && sm[j] > 1.3 * mean && j !== poc) hvn.push(P(j));
+      if (sm[j] < sm[j - 1] && sm[j] <= sm[j + 1] && sm[j] < 0.5 * mean && j > a && j < b) lvn.push(P(j));
+    }
+    return { i0, i1, lo, arr, total, max: arr[poc], pocJ: poc, vaJ: [a, b], poc: P(poc), val: P(a), vah: P(b), low: P(0), high: P(arr.length - 1), hvn, lvn };
+  }
+
+  function persistence(S, k, bin) {
+    let n = 0;
+    for (let j = Math.max(0, k - 9); j <= k; j++) {
+      const bk = S.bars[j].book; if (!bk) continue;
+      const idx = bin - bk.base; let hit = false;
+      for (let q = idx - 1; q <= idx + 1; q++) if (q >= 0 && q < bk.arr.length && bk.arr[q] >= 3 * bk.med) hit = true;
+      if (hit) n++;
+    }
+    return n;
+  }
+
+  // ---------------------------------------------------------------- confluence evaluation
+  function evaluate(S, k) {
+    const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN);
+    const prof = profile(S, k - S.params.lookback + 1, k);
+    const vw = S.vwap[k], sd = S.vsd[k];
+    const ctx = { S, k, b, atr, prof, vw, sd, sdOk: sd > 0.25 * atr && k - S.sessStart[k] >= 20 };
+    const long = sideEval(ctx, 1), short = sideEval(ctx, -1);
+    let pick = null;
+    for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: ctx.sdOk, long, short, pick };
+  }
+
+  function sideEval(ctx, d) {
+    const { S, k, b, atr, prof, vw, sd, sdOk } = ctx;
+    const f = x => x.toFixed(S.dec);
+    const ext = d > 0 ? b.l : b.h;
+    const up = d > 0, htfWord = S.htfLabel, ltfWord = S.tfLabel;
+
+    // 1. Location
+    const loc = { key: 'loc', label: 'Location', max: 25, pts: 0, detail: '' };
+    let cont = false;
+    const edge = up ? prof.val : prof.vah;
+    if (d * (edge - ext) >= -0.1 * atr && d * (b.c - edge) >= -0.6 * atr) {
+      loc.pts = 25; loc.detail = `Price tested the value-area ${up ? 'low' : 'high'} at ${f(edge)}.`;
+    } else if (sdOk && d * ((vw - d * 2 * sd) - ext) >= 0) {
+      loc.pts = 25; loc.detail = `Price stretched to VWAP ${up ? '−' : '+'}2σ at ${f(vw - d * 2 * sd)}.`;
+    } else if (sdOk && d * ((vw - d * sd) - ext) >= 0) {
+      loc.pts = 18; loc.detail = `Price reached VWAP ${up ? '−' : '+'}1σ at ${f(vw - d * sd)}.`;
+    } else if (S.htf.trend === (up ? 'up' : 'down')) {
+      for (const [p, n] of [[prof.poc, 'POC'], [vw, 'VWAP']]) {
+        if (Math.abs(ext - p) <= 0.4 * atr && d * (b.c - p) > 0) {
+          loc.pts = 14; cont = true;
+          loc.detail = `Pullback held the ${n} at ${f(p)} inside a ${htfWord} ${up ? 'uptrend' : 'downtrend'}.`; break;
+        }
+      }
+    }
+    if (!loc.pts) loc.detail = `Price ${f(b.c)} sits between VAL ${f(prof.val)} and VAH ${f(prof.vah)}. The middle is not an edge.`;
+
+    // 4. Order flow
+    const flow = { key: 'flow', label: 'Order flow', max: 15, pts: 0, detail: '' };
+    const rng = Math.max(b.h - b.l, S.BIN), loc01 = (b.c - b.l) / rng, closeLoc = up ? loc01 : 1 - loc01;
+    if (S.hasFlow) {
+      const against = (up ? b.sv : b.bv) / Math.max(b.v, 1e-9), dl = S.delta;
+      let exL = Infinity, exH = -Infinity, mnD = Infinity, mxD = -Infinity;
+      for (let j = Math.max(0, k - 10); j < k; j++) { const q = S.bars[j]; exL = Math.min(exL, q.l); exH = Math.max(exH, q.h); mnD = Math.min(mnD, dl[j]); mxD = Math.max(mxD, dl[j]); }
+      if (against >= 0.55 && closeLoc >= 0.5) {
+        flow.pts = 15; flow.detail = `${up ? 'Sellers' : 'Buyers'} were absorbed: ${Math.round(against * 100)}% ${up ? 'sell' : 'buy'} volume, yet the bar closed in its ${up ? 'upper' : 'lower'} half.`;
+      } else if (k > 10 && (up ? (b.l < exL && dl[k] > mnD) : (b.h > exH && dl[k] < mxD))) {
+        flow.pts = 10; flow.detail = `Delta divergence: new ${up ? 'low on weaker selling' : 'high on weaker buying'}.`;
+      } else if (k && d * dl[k] > 0 && d * dl[k - 1] < 0) {
+        flow.pts = 8; flow.detail = `Delta flipped ${up ? 'positive' : 'negative'} (${dl[k] > 0 ? '+' : ''}${Math.round(dl[k])}).`;
+      } else flow.detail = `No absorption or divergence. Bar delta ${dl[k] > 0 ? '+' : ''}${Math.round(dl[k])}.`;
+    } else {
+      let sv = 0, n = 0;
+      for (let j = Math.max(0, k - 20); j < k; j++) { sv += S.bars[j].v; n++; }
+      const avg = n ? sv / n : b.v;
+      if (avg > 0 && b.v >= 1.5 * avg && closeLoc >= 0.6) { flow.pts = 12; flow.detail = `Volume spike (${(b.v / avg).toFixed(1)}× average) with a rejection close.`; }
+      else if (closeLoc >= 0.7) { flow.pts = 6; flow.detail = 'Strong rejection close on normal volume.'; }
+      else flow.detail = 'No volume rejection on this bar (delta estimated from OHLCV).';
+    }
+
+    // 2. Trigger: fractal liquidity sweep + reclaim, or a structure shift
+    const trig = { key: 'trig', label: 'Trigger', max: 20, pts: 0, detail: `No fractal sweep or structure shift on this bar.` };
+    let swept = null;
+    const want = up ? 'L' : 'H';
+    for (const [list, maxAge] of (S.params.trigger === 'flow' ? [] : [[S.htfSwings, 600], [S.swings, 90]])) {
+      for (let j = list.length - 1, n = 0; j >= 0 && n < 40; j--, n++) {
+        const s = list[j];
+        if (s.type !== want || s.taken === null || s.taken < k - 1 || s.conf >= s.taken || k - s.i > maxAge) continue;
+        if (d * (b.c - s.price) > 0) { swept = s; break; }
+      }
+      if (swept) break;
+    }
+    if (S.params.trigger === 'flow') swept = null;
+    if (S.params.trigger === 'flow') {
+      if (flow.pts >= 10 && d * (b.c - (up ? prof.val : prof.vah)) >= -0.6 * atr) {
+        trig.pts = 15; trig.detail = `Order-flow trigger at the edge: ${up ? 'buyers' : 'sellers'} took control on this bar.`;
+      } else trig.detail = 'Waiting for absorption or delta divergence at the edge.';
+    } else if (swept) {
+      trig.pts = swept.tf === 'H' ? 20 : 17;
+      trig.detail = `Swept the ${swept.tf === 'H' ? htfWord : ltfWord} fractal ${up ? 'low' : 'high'} at ${f(swept.price)} and closed back ${up ? 'above' : 'below'} it.`;
+    } else {
+      const ev = S.ltfEvents[S.ltfEvents.length - 1];
+      if (ev && ev.idx === k && ev.dir === d && (ev.type === 'CHoCH' || cont)) {
+        trig.pts = ev.type === 'CHoCH' ? 15 : 12;
+        trig.detail = `${ltfWord} ${ev.type === 'CHoCH' ? 'change of character' : 'break of structure'} ${up ? 'up' : 'down'} through ${f(ev.price)}.`;
+      }
+    }
+
+    // levels: stop beyond the sweep / bar extreme, ATR floor so it is not inside the noise
+    const entry = b.c;
+    let extreme = up ? Math.min(b.l, k ? S.bars[k - 1].l : b.l) : Math.max(b.h, k ? S.bars[k - 1].h : b.h);
+    if (swept) extreme = up ? Math.min(extreme, swept.price) : Math.max(extreme, swept.price);
+    let sl = extreme - d * Math.max(0.2 * atr, 2 * S.pip);
+    if (d * (entry - sl) < 0.8 * atr) sl = entry - d * 0.8 * atr;
+    const risk = d * (entry - sl);
+    const ahead = (p, min) => p != null && isFinite(p) && d * (p - entry) >= min;
+    const untaken = [];
+    for (const list of [S.htfSwings, S.swings])
+      for (let j = list.length - 1, n = 0; j >= 0 && n < 30; j--, n++) {
+        const s = list[j];
+        if (s.taken === null && s.type === (up ? 'H' : 'L')) untaken.push([s.price, `${s.tf === 'H' ? htfWord : ltfWord} swing ${up ? 'high' : 'low'}`]);
+      }
+    const nearest = arr => arr.filter(Boolean).sort((x, y) => d * (x[0] - y[0]))[0];
+    let t1 = nearest([[prof.poc, 'POC'], [vw, 'VWAP']].filter(x => ahead(x[0], 0.3 * atr)));
+    if (!t1) t1 = nearest([[up ? prof.vah : prof.val, up ? 'VAH' : 'VAL'], sdOk ? [vw + d * sd, `VWAP ${up ? '+' : '−'}1σ`] : null, ...untaken].filter(x => x && ahead(x[0], 0.3 * atr)));
+    if (!t1) t1 = [entry + d * 1.5 * risk, '1.5R'];
+    const t1d = d * (t1[0] - entry);
+    let t2 = nearest([[up ? prof.vah : prof.val, up ? 'VAH' : 'VAL'], sdOk ? [vw + d * sd, `VWAP ${up ? '+' : '−'}1σ`] : null,
+      sdOk ? [vw + d * 2 * sd, `VWAP ${up ? '+' : '−'}2σ`] : null, [up ? prof.high : prof.low, 'profile extreme'], ...untaken]
+      .filter(x => x && ahead(x[0], t1d + 0.5 * atr)));
+    if (!t2) t2 = [entry + d * 2 * t1d, 'extension'];
+    const rr1 = t1d / risk, rr2 = d * (t2[0] - entry) / risk;
+
+    // 3. Order book
+    const book = { key: 'book', label: 'Order book', max: 15, pts: 0, detail: '' };
+    if (S.hasBook && b.book) {
+      const bk = b.book; let best = null, block = null;
+      for (let j = 0; j < bk.arr.length; j++) {
+        const p = (bk.base + j) * S.BIN, sz = bk.arr[j], dist = d * (b.c - p);
+        if (dist >= -S.BIN && dist <= 3 * atr && sz >= 3 * bk.med && (!best || sz > best.sz)) best = { p, sz };
+        if (d * (p - b.c) > 0.5 * S.BIN && d * (t1[0] - p) > 0 && sz >= 4 * bk.med && (!block || sz > block.sz)) block = { p, sz };
+      }
+      const side = up ? 'bid' : 'ask', opp = up ? 'ask' : 'bid';
+      if (best) {
+        const pers = persistence(S, k, Math.round(best.p / S.BIN));
+        if (pers >= 6) { book.pts += 10; book.detail = `A ${Math.round(best.sz)}-lot ${side} wall at ${f(best.p)} has rested for ${pers} of the last 10 bars.`; }
+        else { book.pts += 4; book.detail = `A fresh ${Math.round(best.sz)}-lot ${side} wall at ${f(best.p)} appeared. It may be pulled.`; }
+      } else book.detail = `No resting ${side} liquidity near price.`;
+      if (!block) { book.pts += 5; book.detail += ` The path to TP1 is clear of large ${opp} walls.`; }
+      else book.detail += ` A ${Math.round(block.sz)}-lot ${opp} wall at ${f(block.p)} sits before TP1.`;
+    } else { book.na = true; book.detail = 'Needs live order-book data. Not available on OHLCV.'; }
+
+    // 5. HTF fractal structure
+    const tr = S.htf.trend, htf = { key: 'htf', label: `${htfWord} structure`, max: 15, pts: 0, detail: '' };
+    if (!S.params.useHTF) { htf.na = true; htf.detail = 'Switched off.'; }
+    else if (tr === (up ? 'up' : 'down')) { htf.pts = 15; htf.detail = `${htfWord} fractal structure is ${tr}, with the trade.`; }
+    else if (tr === 'none') { htf.pts = 7; htf.detail = `${htfWord} structure has not broken a swing yet.`; }
+    else htf.detail = `Against the ${htfWord} ${tr}trend. Fade setups only.`;
+
+    // 6. Room to target
+    const room = { key: 'room', label: 'Room to target', max: 10, pts: 0, detail: '' };
+    if (risk > 4 * atr) room.detail = `Stop would be ${(risk / atr).toFixed(1)}× ATR. Too wide.`;
+    else if (rr1 >= 1.5) { room.pts = 10; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R.`; }
+    else if (rr1 >= 1.0) { room.pts = 6; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R. Tight.`; }
+    else room.detail = `Only ${rr1.toFixed(1)}R to TP1 ${t1[1]}. Not enough room.`;
+
+    const factors = [loc, trig, book, flow, htf, room];
+    let pts = 0, max = 0;
+    for (const x of factors) if (!x.na) { pts += x.pts; max += x.max; }
+    const score = Math.round(100 * pts / max);
+    const fire = loc.pts > 0 && trig.pts > 0 && rr1 >= S.params.minRR && risk <= 4 * atr && score >= S.params.threshold;
+    return {
+      dir: d, factors, score, fire, entry, sl, risk, tp1: t1[0], tp1Name: t1[1], tp2: t2[0], tp2Name: t2[1], rr1, rr2,
+      setup: cont ? 'Trend pullback' : (loc.pts && trig.pts ? 'Value-edge reversal' : 'Value-edge reversal'),
+      hasTrigger: trig.pts > 0, hasLocation: loc.pts > 0
+    };
+  }
+
+  // ---------------------------------------------------------------- trades
+  function narrate(S, c) {
+    const f = x => x.toFixed(S.dec), pips = x => Math.round(x / S.pip);
+    const parts = c.factors.filter(x => x.pts > 0 && x.key !== 'room' && x.key !== 'htf').map(x => x.detail);
+    const htf = c.factors.find(x => x.key === 'htf');
+    return `${c.dir > 0 ? 'Long' : 'Short'}, ${c.setup.toLowerCase()}. ${parts.join(' ')}${htf.na ? '' : ' ' + htf.detail} ` +
+      `Stop ${f(c.sl)} (${pips(c.risk)} pips). TP1 ${c.tp1Name} ${f(c.tp1)} at ${c.rr1.toFixed(1)}R, TP2 ${c.tp2Name} ${f(c.tp2)} at ${c.rr2.toFixed(1)}R. ` +
+      `Bank half at TP1 and move the stop to breakeven. Never widen the stop.`;
+  }
+
+  function openTrade(S, e, k) {
+    const c = e.pick;
+    const t = {
+      id: S.trades.length + 1, dir: c.dir, setup: c.setup, k, t: S.bars[k].t, entry: c.entry, sl: c.sl, sl0: c.sl,
+      tp1: c.tp1, tp2: c.tp2, tp1Name: c.tp1Name, tp2Name: c.tp2Name, risk: c.risk, rr1: c.rr1, rr2: c.rr2, score: c.score,
+      factors: c.factors.map(x => ({ ...x })), stage: 0, realized: 0, status: 'Running', result: null, exitIdx: null, exitPrice: null, pips: null
+    };
+    t.narrative = narrate(S, c);
+    S.trades.push(t); S.active = t;
+  }
+
+  function finish(S, t, k, r, status, px) {
+    t.result = r; t.status = status; t.exitIdx = k; t.exitPrice = px; t.pips = r * t.risk / S.pip;
+    S.active = null; S.cooldownUntil = k + 5;
+  }
+
+  function manage(S, k) {
+    const t = S.active, b = S.bars[k], d = t.dir;
+    const hit = p => d > 0 ? b.h >= p : b.l <= p;
+    const stopHit = d > 0 ? b.l <= t.sl : b.h >= t.sl;
+    const R = p => d * (p - t.entry) / t.risk;
+    if (t.stage === 0) {
+      if (stopHit) return finish(S, t, k, -1, 'Stopped out', t.sl);
+      if (hit(t.tp1)) {
+        t.stage = 1; t.realized = 0.5 * R(t.tp1); t.sl = t.entry; t.tp1Idx = k;
+        if (hit(t.tp2)) return finish(S, t, k, t.realized + 0.5 * R(t.tp2), 'TP2 hit', t.tp2);
+        return;
+      }
+    } else {
+      if (stopHit) return finish(S, t, k, t.realized, 'TP1, rest at breakeven', t.entry);
+      if (hit(t.tp2)) return finish(S, t, k, t.realized + 0.5 * R(t.tp2), 'TP2 hit', t.tp2);
+    }
+    if (k - t.k >= 240) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
+  }
+
+  function liveR(S, price) {
+    const t = S.active; if (!t) return 0;
+    const r = t.dir * (price - t.entry) / t.risk;
+    return t.stage ? t.realized + 0.5 * r : r;
+  }
+
+  function stats(S) {
+    const closed = S.trades.filter(t => t.result !== null);
+    let wins = 0, losses = 0, be = 0, netR = 0, netPips = 0, gp = 0, gl = 0, peak = 0, dd = 0;
+    const curve = [0];
+    for (const t of closed) {
+      if (t.result > 0.05) wins++; else if (t.result < -0.05) losses++; else be++;
+      netR += t.result; netPips += t.pips;
+      if (t.result > 0) gp += t.result; else gl -= t.result;
+      curve.push(netR); peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR);
+    }
+    const n = closed.length;
+    return { n, wins, losses, be, winRate: n ? wins / n : 0, netR, netPips, exp: n ? netR / n : 0, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), maxDD: dd, curve };
+  }
+
+  function rebuild(S) {
+    const N = createStore(S.opts);
+    N.params = { ...S.params };
+    for (const b of S.bars) closeBar(N, b);
+    N.cur = S.cur; N.liveBook = S.liveBook;
+    return N;
+  }
+
+  // ---------------------------------------------------------------- simulated XAUUSD feed with a live book
+  function createSim(price) {
+    return { price, fair: price, regime: 'range', regimeLeft: 140, forced: null, walls: [], base: new Map(), bounce: 0, t0: Date.UTC(2026, 10, 9, 0, 0), barNo: 0, tickN: 0 };
+  }
+
+  function baseAt(sim, bin) {
+    let v = sim.base.get(bin);
+    if (v === undefined) { v = 14 + 40 * Math.random() ** 2; sim.base.set(bin, v); }
+    return v;
+  }
+
+  function bookSnapshot(S, sim) {
+    const BIN = S.BIN, cb = Math.round(sim.price / BIN), base = cb - 40, arr = new Float32Array(81);
+    for (let j = 0; j < 81; j++) {
+      const bin = base + j, dist = Math.abs(bin - cb);
+      let s = baseAt(sim, bin) * (0.45 + 0.55 * Math.min(1, dist / 8));
+      if (dist === 0) s *= 0.3;
+      arr[j] = s;
+    }
+    for (const w of sim.walls) {
+      if (w.dead) continue;
+      const idx = Math.round(w.price / BIN) - base;
+      if (idx >= 0 && idx < 81) {
+        arr[idx] += w.size;
+        if (idx > 0) arr[idx - 1] += w.size * 0.22;
+        if (idx < 80) arr[idx + 1] += w.size * 0.22;
+      }
+    }
+    return { base, arr, med: median(arr) };
+  }
+
+  function record(b, price, bv, sv, BIN, setClose) {
+    if (setClose) { b.c = price; if (price > b.h) b.h = price; if (price < b.l) b.l = price; }
+    const v = bv + sv;
+    b.v += v; b.bv += bv; b.sv += sv; b.pv += price * v; b.p2v += price * price * v;
+    const bin = Math.round(price / BIN);
+    const f = b.fp.get(bin);
+    if (f) { f[0] += bv; f[1] += sv; } else b.fp.set(bin, [bv, sv]);
+  }
+
+  function simStartBar(S, sim) {
+    const p = sim.price;
+    S.cur = { t: sim.t0 + sim.barNo * S.interval, o: p, h: p, l: p, c: p, v: 0, bv: 0, sv: 0, pv: 0, p2v: 0, fp: new Map(), ticks: 0, book: null };
+  }
+
+  function simTick(S, sim) {
+    const b = S.cur, reg = sim.regime;
+    const sigma = reg === 'volatile' ? 0.5 : 0.26;
+    let drift = 0;
+    if (reg === 'range') drift = 0.004 * (sim.fair - sim.price);
+    else if (reg === 'trend-up') drift = 0.013;
+    else if (reg === 'trend-down') drift = -0.013;
+    else drift = 0.002 * (sim.fair - sim.price);
+    if (reg === 'range') sim.fair += 0.012 * randn(); else sim.fair += 0.01 * (sim.price - sim.fair);
+    drift += sim.bounce; sim.bounce *= 0.93;
+    let z = randn(); if (Math.random() < 0.004) z *= 4;
+    let np = sim.price + drift + sigma * z;
+    let absorbed = 0, wallHit = null;
+    for (const w of sim.walls) {
+      if (w.dead) continue;
+      if (w.kind === 'spoof') { if (Math.abs(sim.price - w.price) < w.pullDist) w.dead = true; continue; }
+      if (w.side === 'bid' && np < w.price && sim.price >= w.price - 0.05) {
+        const hit = 25 + 40 * Math.random(); w.size -= hit; absorbed += hit; wallHit = w;
+        if (w.size > 0) { np = w.price + 0.1 * Math.round(Math.random() * 2); sim.bounce += 0.02; } else w.dead = true;
+      } else if (w.side === 'ask' && np > w.price && sim.price <= w.price + 0.05) {
+        const hit = 25 + 40 * Math.random(); w.size -= hit; absorbed += hit; wallHit = w;
+        if (w.size > 0) { np = w.price - 0.1 * Math.round(Math.random() * 2); sim.bounce -= 0.02; } else w.dead = true;
+      }
+    }
+    np = Math.round(np * 10) / 10;
+    const dp = np - sim.price;
+    const vol = (4 + 3 * Math.abs(dp) / sigma) * Math.exp(0.5 * randn());
+    const share = clamp(0.5 + 0.4 * Math.tanh(dp / sigma), 0.05, 0.95);
+    sim.price = np;
+    record(b, np, vol * share, vol * (1 - share), S.BIN, true);
+    if (absorbed > 0) {
+      if (wallHit.side === 'bid') record(b, wallHit.price, absorbed * 0.15, absorbed, S.BIN, false);
+      else record(b, wallHit.price, absorbed, absorbed * 0.15, S.BIN, false);
+    }
+    b.ticks++; sim.tickN++;
+    if (sim.tickN % 3 === 0) S.liveBook = bookSnapshot(S, sim);
+  }
+
+  function simEndBar(S, sim) {
+    const b = S.cur, BIN = S.BIN, cb = Math.round(sim.price / BIN);
+    for (let bin = cb - 45; bin <= cb + 45; bin++) {
+      let s = baseAt(sim, bin);
+      s = 0.92 * s + 0.08 * (14 + 45 * Math.random() ** 2);
+      if (Math.random() < 0.006) s = 80 + 80 * Math.random();
+      sim.base.set(bin, s);
+    }
+    if (sim.base.size > 1500) for (const key of sim.base.keys()) if (Math.abs(key - cb) > 200) sim.base.delete(key);
+    for (const w of sim.walls) { w.age++; if (w.age > w.life) w.dead = true; }
+    sim.walls = sim.walls.filter(w => !w.dead);
+    if (sim.walls.length < 6 && Math.random() < 0.22) {
+      const side = Math.random() < 0.5 ? 'bid' : 'ask', dist = 2 + 9 * Math.random();
+      let p = side === 'bid' ? sim.price - dist : sim.price + dist;
+      p = Math.random() < 0.45 ? Math.round(p / 5) * 5 : Math.round(p / BIN) * BIN;
+      const gap = side === 'bid' ? sim.price - p : p - sim.price;
+      if (gap >= 1.5) sim.walls.push({ price: p, side, kind: Math.random() < 0.3 ? 'spoof' : 'real', size: 250 + 600 * Math.random(), life: 60 + 200 * Math.random(), age: 0, pullDist: 1 + 1.5 * Math.random(), dead: false });
+    }
+    b.book = bookSnapshot(S, sim);
+    if (!sim.forced) {
+      if (--sim.regimeLeft <= 0) {
+        const r = Math.random();
+        sim.regime = r < 0.5 ? 'range' : r < 0.7 ? 'trend-up' : r < 0.9 ? 'trend-down' : 'volatile';
+        sim.regimeLeft = 60 + Math.floor(160 * Math.random());
+        if (sim.regime === 'range') sim.fair = sim.price;
+      }
+    } else if (sim.regime !== sim.forced) { sim.regime = sim.forced; if (sim.forced === 'range') sim.fair = sim.price; }
+    delete b.ticks;
+    sim.barNo++;
+    S.cur = null;
+    return b;
+  }
+
+  function simStore() {
+    return createStore({ mode: 'sim', symbol: 'XAUUSD', bin: 0.5, pip: 0.1, dec: 2, interval: 60000, htfMult: 15 });
+  }
+
+  function simWarmup(S, sim, nBars) {
+    for (let i = 0; i < nBars; i++) {
+      simStartBar(S, sim);
+      for (let t = 0; t < TPB; t++) simTick(S, sim);
+      closeBar(S, simEndBar(S, sim));
+    }
+    simStartBar(S, sim);
+    S.liveBook = bookSnapshot(S, sim);
+  }
+
+  // ---------------------------------------------------------------- CSV (OHLCV) import for backtests
+  function niceNum(x) { const p = Math.pow(10, Math.floor(Math.log10(x))), m = x / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; }
+
+  function parseCSV(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 30) throw new Error('The file needs at least 30 rows of bars.');
+    const delim = lines[0].includes('\t') ? '\t' : (lines[0].split(';').length > lines[0].split(',').length ? ';' : ',');
+    const split = l => l.split(delim).map(x => x.trim().replace(/^"|"$/g, ''));
+    let head = split(lines[0]).map(h => h.toLowerCase().replace(/[<>\s]/g, ''));
+    const hasHeader = head.some(h => /open|high|low|close/.test(h));
+    let cols;
+    if (hasHeader) {
+      const find = (...names) => head.findIndex(h => names.some(n => h === n || h.startsWith(n)));
+      cols = { date: find('date', 'datetime', 'timestamp', 'time'), time: head.indexOf('time'), o: find('open', 'o'), h: find('high', 'h'), l: find('low', 'l'), c: find('close', 'c'), v: find('tickvol', 'tick_volume', 'volume', 'vol', 'v') };
+      if (cols.time === cols.date) cols.time = -1;
+    } else {
+      const n = split(lines[0]).length;
+      cols = n >= 7 ? { date: 0, time: 1, o: 2, h: 3, l: 4, c: 5, v: 6 } : { date: 0, time: -1, o: 1, h: 2, l: 3, c: 4, v: n > 5 ? 5 : -1 };
+    }
+    if ([cols.o, cols.h, cols.l, cols.c].some(x => x < 0)) throw new Error('Could not find open, high, low and close columns.');
+    const rows = [];
+    for (let i = hasHeader ? 1 : 0; i < lines.length; i++) {
+      const p = split(lines[i]);
+      const o = +p[cols.o], h = +p[cols.h], l = +p[cols.l], c = +p[cols.c];
+      if (![o, h, l, c].every(isFinite)) continue;
+      let v = cols.v >= 0 ? +p[cols.v] : 1; if (!isFinite(v) || v <= 0) v = 1;
+      let t = NaN;
+      if (cols.date >= 0) {
+        let ds = p[cols.date];
+        if (/^\d{9,13}$/.test(ds)) { t = +ds; if (t < 1e12) t *= 1000; }
+        else {
+          ds = ds.replace(/\./g, '-');
+          if (cols.time >= 0 && p[cols.time]) ds += 'T' + p[cols.time];
+          else ds = ds.replace(' ', 'T');
+          t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(ds) ? ds : ds + 'Z');
+        }
+      }
+      rows.push({ t, o, h: Math.max(h, o, c), l: Math.min(l, o, c), c, v });
+    }
+    if (rows.length < 30) throw new Error('Fewer than 30 valid bars were found.');
+    if (rows.some(r => !isFinite(r.t))) rows.forEach((r, i) => r.t = i * 60000);
+    rows.sort((a, b) => a.t - b.t);
+    return rows;
+  }
+
+  function csvStore(rows, name) {
+    const diffs = []; for (let i = 1; i < rows.length; i++) diffs.push(rows[i].t - rows[i - 1].t);
+    const interval = Math.max(60000, median(diffs.filter(x => x > 0)) || 60000);
+    const px = median(rows.map(r => r.c));
+    const pip = px < 20 ? 0.0001 : px < 500 ? 0.01 : px < 20000 ? 0.1 : 1;
+    const dec = Math.max(0, Math.round(-Math.log10(pip))) + 1;
+    const rng = median(rows.map(r => r.h - r.l)) || pip * 10;
+    const bin = Math.max(pip, niceNum(rng / 6));
+    const htfMult = interval <= 60000 ? 15 : interval <= 300000 ? 3 : 4;
+    const S = createStore({ mode: 'csv', symbol: name || 'CSV', bin, pip, dec, interval, htfMult });
+    for (const r of rows) {
+      const tp = (r.h + r.l + r.c) / 3, rg = r.h - r.l, loc = rg > 0 ? (r.c - r.l) / rg : 0.5;
+      closeBar(S, { t: r.t, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v, bv: r.v * loc, sv: r.v * (1 - loc), pv: tp * r.v, p2v: r.v * (tp * tp + rg * rg / 12), fp: null, book: null });
+    }
+    return S;
+  }
+
+  return { TPB, createStore, closeBar, evaluate, profile, persistence, stats, rebuild, liveR, createSim, simStore, simWarmup, simStartBar, simTick, simEndBar, bookSnapshot, parseCSV, csvStore, intervalLabel };
+})();
+
+
+</script>
+<script>
+// ===================== Aurum Flow UI =====================
+(() => {
+  const $ = s => document.querySelector(s);
+  const C = { bg: '#0a0f19', panel: '#111a29', line: '#22314b', grid: 'rgba(34,49,75,.55)', fg: '#e3e8f1', muted: '#8a97af', faint: '#5b6883', gold: '#e2b349', up: '#33c3a0', down: '#ee6a5a' };
+  const HEAT = (() => {
+    const st = [[0, [18, 32, 72, 0]], [0.18, [26, 54, 122, .42]], [0.45, [22, 128, 150, .68]], [0.72, [226, 168, 60, .85]], [1, [255, 244, 214, .95]]], out = [];
+    for (let i = 0; i < 64; i++) {
+      const x = i / 63; let s = 0; while (s < st.length - 2 && x > st[s + 1][0]) s++;
+      const [x0, a] = st[s], [x1, b] = st[s + 1], u = (x - x0) / (x1 - x0), m = q => a[q] + (b[q] - a[q]) * u;
+      out.push(`rgba(${m(0) | 0},${m(1) | 0},${m(2) | 0},${m(3).toFixed(3)})`);
+    }
+    return out;
+  })();
+
+  let S, sim = null, dirty = true, panelDirty = true, journalDirty = true;
+  const view = { follow: true, end: 0, n: 130 };
+  const layers = { heat: true, vwap: true, prof: true, frac: true, trades: true, delta: true };
+  let profMode = 'engine', custom = null, selecting = false, selDrag = null, hover = null, drag = null, caseSide = 1, caseAuto = true;
+  let heatCache = { key: '', norm: 1 }, profCache = { key: '', p: null };
+
+  const fmt = x => (x == null || !isFinite(x)) ? '–' : x.toFixed(S.dec);
+  const pad = n => String(n).padStart(2, '0');
+  const tfmt = t => { const d = new Date(t); return S.interval >= 86400e3 ? `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` : `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const hm = t => { const d = new Date(t); return S.interval >= 86400e3 ? `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())}` : `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+  // ------------------------------------------------------------ boot
+  function afterRebuild() {
+    $('#tf').textContent = `${S.tfLabel} · HTF ${S.htfLabel}`;
+    document.querySelector('[data-layer="heat"]').disabled = !S.hasBook;
+    heatCache.key = ''; profCache.key = '';
+    dirty = panelDirty = journalDirty = true;
+  }
+
+  const total = () => S.bars.length + (S.cur ? 1 : 0);
+  const getBar = i => i < S.bars.length ? S.bars[i] : S.cur;
+  const lastPrice = () => (S.cur ? S.cur.c : S.bars[S.bars.length - 1].c);
+
+  // ------------------------------------------------------------ chart geometry
+  const cv = $('#chart'), ctx = cv.getContext('2d');
+  let CW = 0, CH = 0, DPR = 1;
+  function resize() {
+    const r = cv.parentElement.getBoundingClientRect();
+    DPR = Math.min(window.devicePixelRatio || 1, 2); CW = r.width; CH = r.height;
+    cv.width = Math.round(CW * DPR); cv.height = Math.round(CH * DPR); dirty = true;
+  }
+  new ResizeObserver(resize).observe(cv.parentElement);
+
+  function geom() {
+    const axisW = 70, timeH = 22, dH = layers.delta ? Math.round(CH * 0.15) : 0;
+    const plot = { x: 0, y: 6, w: CW - axisW, h: CH - timeH - dH - 10 };
+    const dpl = { x: 0, y: plot.y + plot.h + 4, w: plot.w, h: dH - 4 };
+    const n = view.n, tot = total();
+    const end = view.follow ? tot - 1 + Math.round(n * 0.12) : view.end;
+    const start = end - n + 1, bw = plot.w / n;
+    const xOf = i => plot.x + (i - start + 0.5) * bw;
+    const iOf = x => Math.round((x - plot.x) / bw - 0.5 + start);
+    const i0 = Math.max(0, Math.floor(start)), i1 = Math.min(tot - 1, Math.ceil(end));
+    let lo = Infinity, hi = -Infinity;
+    for (let i = i0; i <= i1; i++) { const b = getBar(i); if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; }
+    if (!isFinite(lo)) { lo = lastPrice() - 5; hi = lastPrice() + 5; }
+    const padP = (hi - lo) * 0.1 + S.BIN; lo -= padP; hi += padP;
+    const yOf = p => plot.y + (hi - p) / (hi - lo) * plot.h;
+    const pOf = y => hi - (y - plot.y) / plot.h * (hi - lo);
+    return { plot, dpl, axisW, timeH, n, start, end, bw, xOf, iOf, i0, i1, lo, hi, yOf, pOf };
+  }
+
+  function niceStep(r) { const p = Math.pow(10, Math.floor(Math.log10(r))), m = r / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; }
+
+  function displayProfile() {
+    const last = S.bars.length - 1;
+    let i0, i1;
+    if (profMode === 'custom' && custom) { i0 = custom[0]; i1 = Math.min(custom[1], last); }
+    else if (profMode === 'session') { i0 = S.sessStart[last]; i1 = last; }
+    else { i0 = last - S.params.lookback + 1; i1 = last; }
+    const key = `${profMode}|${i0}|${i1}|${S.bars.length}`;
+    if (profCache.key !== key) profCache = { key, p: AF.profile(S, i0, i1) };
+    return profCache.p;
+  }
+
+  // ------------------------------------------------------------ draw
+  function draw() {
+    if (!CW) return;
+    const g = geom(), { plot, dpl, xOf, yOf, bw, i0, i1, lo, hi } = g;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, CW, CH);
+
+    // grid + price axis
+    const step = niceStep((hi - lo) / Math.max(3, plot.h / 46));
+    ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+    for (let p = Math.ceil(lo / step) * step; p <= hi; p += step) {
+      const y = Math.round(yOf(p)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke();
+      ctx.fillStyle = C.muted; ctx.textAlign = 'left'; ctx.fillText(p.toFixed(step < 1 ? S.dec : Math.max(0, S.dec - 2)), plot.x + plot.w + 6, y);
+    }
+    // time axis
+    const every = Math.max(1, Math.round(90 / bw));
+    ctx.textAlign = 'center'; ctx.fillStyle = C.muted;
+    for (let i = Math.ceil(i0 / every) * every; i <= i1; i += every) {
+      const x = Math.round(xOf(i)) + 0.5;
+      ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h); ctx.stroke();
+      ctx.fillText(hm(getBar(i).t), x, CH - g.timeH / 2);
+    }
+
+    ctx.save(); ctx.beginPath(); ctx.rect(plot.x, plot.y, plot.w, plot.h); ctx.clip();
+
+    // heatmap
+    if (layers.heat && S.hasBook) {
+      const hk = `${i0}|${i1}|${S.bars.length}`;
+      if (heatCache.key !== hk) {
+        const vals = [];
+        for (let i = i0; i <= i1; i += 2) { const bk = i < S.bars.length ? S.bars[i].book : S.liveBook; if (bk) for (let j = 0; j < bk.arr.length; j += 2) vals.push(bk.arr[j]); }
+        vals.sort((a, b) => a - b);
+        heatCache = { key: hk, norm: vals[Math.floor(vals.length * 0.985)] || 1 };
+      }
+      const norm = heatCache.norm, BIN = S.BIN;
+      for (let i = i0; i <= i1; i++) {
+        const bk = i < S.bars.length ? S.bars[i].book : S.liveBook; if (!bk) continue;
+        const x = xOf(i) - bw / 2;
+        for (let j = 0; j < bk.arr.length; j++) {
+          const p = (bk.base + j) * BIN; if (p < lo - BIN || p > hi + BIN) continue;
+          const v = bk.arr[j] / norm; if (v < 0.07) continue;
+          const y0 = yOf(p + BIN / 2), y1 = yOf(p - BIN / 2);
+          ctx.fillStyle = HEAT[Math.min(63, Math.floor(Math.pow(Math.min(1, v), 0.62) * 63))];
+          ctx.fillRect(x, y0, bw + 0.7, y1 - y0 + 0.7);
+        }
+      }
+    }
+
+    // volume profile
+    const prof = layers.prof ? displayProfile() : null;
+    if (prof) {
+      const xa = Math.max(plot.x, xOf(prof.i0) - bw / 2), xb = Math.min(plot.x + plot.w, xOf(prof.i1) + bw / 2);
+      if (xb > xa) {
+        ctx.fillStyle = 'rgba(226,179,73,.035)'; ctx.fillRect(xa, plot.y, xb - xa, plot.h);
+        const maxW = Math.max(50, (xb - xa) * 0.38);
+        for (let j = 0; j < prof.arr.length; j++) {
+          const p = (prof.lo + j) * S.BIN; if (p < lo || p > hi) continue;
+          const y0 = yOf(p + S.BIN / 2), y1 = yOf(p - S.BIN / 2), w = prof.arr[j] / prof.max * maxW;
+          const inVA = j >= prof.vaJ[0] && j <= prof.vaJ[1];
+          ctx.fillStyle = j === prof.pocJ ? 'rgba(226,179,73,.75)' : inVA ? 'rgba(226,179,73,.28)' : 'rgba(138,151,175,.18)';
+          ctx.fillRect(xa, y0 + 0.5, w, Math.max(1, y1 - y0 - 1));
+        }
+      }
+    }
+
+    // VWAP + bands
+    if (layers.vwap) {
+      const live = liveVwap();
+      const vAt = i => i < S.bars.length ? [S.vwap[i], S.vsd[i], S.sessStart[i]] : live;
+      const line = (mult, style, width, dash) => {
+        ctx.strokeStyle = style; ctx.lineWidth = width; ctx.setLineDash(dash); ctx.beginPath();
+        let prevSess = null, started = false;
+        for (let i = i0; i <= i1; i++) {
+          const [v, sd, ss] = vAt(i); if (v == null) continue;
+          const y = yOf(v + mult * sd), x = xOf(i);
+          if (!started || ss !== prevSess) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+          prevSess = ss;
+        }
+        ctx.stroke(); ctx.setLineDash([]);
+      };
+      line(2, 'rgba(226,179,73,.28)', 1, [2, 4]); line(-2, 'rgba(226,179,73,.28)', 1, [2, 4]);
+      line(1, 'rgba(226,179,73,.45)', 1, [5, 4]); line(-1, 'rgba(226,179,73,.45)', 1, [5, 4]);
+      line(0, C.gold, 1.6, []);
+    }
+
+    // fractals + structure
+    if (layers.frac) {
+      ctx.fillStyle = 'rgba(200,210,230,.55)';
+      for (let j = S.swings.length - 1; j >= 0; j--) {
+        const s = S.swings[j]; if (s.i < i0 - 2) break; if (s.i > i1) continue;
+        const x = xOf(s.i), y = yOf(s.price) + (s.type === 'H' ? -7 : 7), d = s.type === 'H' ? -1 : 1;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 4 * d); ctx.lineTo(x + 3, y + 4 * d); ctx.closePath(); ctx.fill();
+      }
+      ctx.font = '10px "IBM Plex Mono", monospace'; ctx.textBaseline = 'bottom';
+      let nH = 0;
+      for (let j = S.htfSwings.length - 1; j >= 0 && nH < 10; j--, nH++) {
+        const s = S.htfSwings[j], xEnd = s.taken !== null ? xOf(s.taken) : plot.x + plot.w;
+        if (xEnd < plot.x) continue;
+        const xs = Math.max(plot.x, xOf(s.i)), y = Math.round(yOf(s.price)) + 0.5;
+        ctx.strokeStyle = s.type === 'H' ? 'rgba(238,106,90,.65)' : 'rgba(51,195,160,.65)'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(xs, y); ctx.lineTo(xEnd, y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = ctx.strokeStyle; ctx.textAlign = 'left';
+        ctx.fillText(`${S.htfLabel} ${s.type === 'H' ? 'high' : 'low'}${s.taken !== null ? ' swept' : ''}`, xs + 3, s.type === 'H' ? y - 2 : y + 12);
+      }
+      for (let j = S.ltfEvents.length - 1; j >= 0; j--) {
+        const e = S.ltfEvents[j]; if (e.idx < i0) break; if (e.type !== 'CHoCH') continue;
+        const xa = xOf(Math.max(e.from, i0)), xb = xOf(e.idx), y = Math.round(yOf(e.price)) + 0.5;
+        ctx.strokeStyle = 'rgba(200,210,230,.5)'; ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xb, y); ctx.stroke();
+        ctx.fillStyle = 'rgba(200,210,230,.75)'; ctx.textAlign = 'center'; ctx.fillText('CHoCH', (xa + xb) / 2, e.dir > 0 ? y - 2 : y + 12);
+      }
+    }
+
+    // trades
+    if (layers.trades) {
+      for (let j = S.trades.length - 1; j >= 0; j--) {
+        const t = S.trades[j], ex = t.exitIdx !== null ? t.exitIdx : total() - 1 + 6;
+        if (ex < i0) break; if (t.k > i1) continue;
+        const xa = xOf(t.k), xb = Math.min(plot.x + plot.w, xOf(ex));
+        const ye = yOf(t.entry), ysl = yOf(t.sl0), yt2 = yOf(t.tp2), yt1 = yOf(t.tp1);
+        ctx.fillStyle = 'rgba(51,195,160,.12)'; ctx.fillRect(xa, Math.min(ye, yt2), xb - xa, Math.abs(yt2 - ye));
+        ctx.fillStyle = 'rgba(238,106,90,.14)'; ctx.fillRect(xa, Math.min(ye, ysl), xb - xa, Math.abs(ysl - ye));
+        ctx.strokeStyle = 'rgba(51,195,160,.7)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(xa, yt1); ctx.lineTo(xb, yt1); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = C.fg; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(xa, ye); ctx.lineTo(xb, ye); ctx.stroke();
+        // entry arrow
+        const b = getBar(t.k), ay = t.dir > 0 ? yOf(b.l) + 14 : yOf(b.h) - 14;
+        ctx.fillStyle = t.dir > 0 ? C.up : C.down; ctx.beginPath();
+        ctx.moveTo(xa, ay - 6 * t.dir); ctx.lineTo(xa - 5, ay + 3 * t.dir); ctx.lineTo(xa + 5, ay + 3 * t.dir); ctx.closePath(); ctx.fill();
+      }
+    }
+
+    // candles
+    const bodyW = Math.max(1, Math.min(14, bw * 0.62));
+    for (let i = i0; i <= i1; i++) {
+      const b = getBar(i), x = Math.round(xOf(i)), upB = b.c >= b.o, col = upB ? C.up : C.down;
+      ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x + 0.5, yOf(b.h)); ctx.lineTo(x + 0.5, yOf(b.l)); ctx.stroke();
+      const y0 = yOf(Math.max(b.o, b.c)), y1 = yOf(Math.min(b.o, b.c));
+      ctx.fillStyle = col; ctx.fillRect(x + 0.5 - bodyW / 2, y0, bodyW, Math.max(1, y1 - y0));
+    }
+
+    // profile level lines
+    if (prof) {
+      const xa = Math.max(plot.x, xOf(prof.i0) - bw / 2);
+      const lvl = (p, dash, alpha) => { const y = Math.round(yOf(p)) + 0.5; ctx.strokeStyle = `rgba(226,179,73,${alpha})`; ctx.setLineDash(dash); ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke(); ctx.setLineDash([]); };
+      lvl(prof.poc, [], .9); lvl(prof.vah, [8, 4], .6); lvl(prof.val, [8, 4], .6);
+    }
+
+    // range selection preview
+    if (selDrag) {
+      const a = Math.min(selDrag[0], selDrag[1]), b = Math.max(selDrag[0], selDrag[1]);
+      ctx.fillStyle = 'rgba(226,179,73,.12)'; ctx.fillRect(xOf(a) - bw / 2, plot.y, xOf(b) - xOf(a) + bw, plot.h);
+    }
+
+    // crosshair
+    if (hover && hover.y < plot.y + plot.h && hover.x < plot.x + plot.w) {
+      ctx.strokeStyle = 'rgba(227,232,241,.35)'; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(plot.x, hover.y + 0.5); ctx.lineTo(plot.x + plot.w, hover.y + 0.5); ctx.moveTo(hover.x + 0.5, plot.y); ctx.lineTo(hover.x + 0.5, plot.y + plot.h); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.restore();
+
+    // axis tags
+    const tag = (p, bg, fg, txt) => {
+      const y = yOf(p); if (y < plot.y || y > plot.y + plot.h) return;
+      ctx.fillStyle = bg; ctx.fillRect(plot.x + plot.w + 1, y - 8, g.axisW - 2, 16);
+      ctx.fillStyle = fg; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '11px "IBM Plex Mono", monospace';
+      ctx.fillText(txt || fmt(p), plot.x + plot.w + 5, y);
+    };
+    if (prof) { tag(prof.vah, '#2a2a22', C.gold, 'VAH'); tag(prof.val, '#2a2a22', C.gold, 'VAL'); tag(prof.poc, '#4a3c18', C.gold, 'POC'); }
+    if (S.active) { tag(S.active.tp2, '#16362f', C.up, 'TP2'); tag(S.active.tp1, '#16362f', C.up, 'TP1'); tag(S.active.sl, '#3a1d1c', C.down, 'SL'); }
+    const lp = lastPrice(), lb = getBar(total() - 1);
+    tag(lp, lb.c >= lb.o ? C.up : C.down, '#06110d');
+    if (hover && hover.y < plot.y + plot.h) tag(g.pOf(hover.y), '#2b3a57', C.fg);
+
+    // delta pane
+    if (layers.delta && dpl.h > 10) {
+      ctx.strokeStyle = C.line; ctx.beginPath(); ctx.moveTo(0, dpl.y - 2.5); ctx.lineTo(CW, dpl.y - 2.5); ctx.stroke();
+      let mx = 1;
+      for (let i = i0; i <= i1; i++) { const b = getBar(i); mx = Math.max(mx, Math.abs(b.bv - b.sv)); }
+      const mid = dpl.y + dpl.h / 2;
+      for (let i = i0; i <= i1; i++) {
+        const b = getBar(i), dv = b.bv - b.sv, h = dv / mx * (dpl.h / 2 - 2);
+        ctx.fillStyle = dv >= 0 ? 'rgba(51,195,160,.7)' : 'rgba(238,106,90,.7)';
+        ctx.fillRect(xOf(i) - bodyW / 2, Math.min(mid, mid - h), bodyW, Math.max(1, Math.abs(h)));
+      }
+      ctx.fillStyle = C.faint; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.font = '10px "IBM Plex Mono", monospace';
+      ctx.fillText(S.hasFlow ? 'DELTA' : 'DELTA (est.)', 8, dpl.y + 2);
+    }
+
+    // legend
+    const hi_ = hover ? Math.max(0, Math.min(total() - 1, g.iOf(hover.x))) : total() - 1, hb = getBar(hi_);
+    const dv = hb.bv - hb.sv, vv = hi_ < S.bars.length ? S.vwap[hi_] : liveVwap()[0];
+    $('#legend').innerHTML = `<span><b>${esc(S.symbol)}</b> ${S.tfLabel}</span><span>${tfmt(hb.t)}</span><span>O <b>${fmt(hb.o)}</b> H <b>${fmt(hb.h)}</b> L <b>${fmt(hb.l)}</b> C <b>${fmt(hb.c)}</b></span><span>Vol <b>${Math.round(hb.v)}</b></span><span>Δ <b class="${dv >= 0 ? 'up' : 'down'}">${dv >= 0 ? '+' : ''}${Math.round(dv)}</b></span><span>VWAP <b style="color:${C.gold}">${fmt(vv)}</b></span>`;
+  }
+
+  function liveVwap() {
+    if (!S.cur) { const k = S.bars.length - 1; return [S.vwap[k], S.vsd[k], S.sessStart[k]]; }
+    const s = S.sess, b = S.cur;
+    const sameSess = Math.floor(b.t / 86400e3) === s.id;
+    const pv = (sameSess ? s.pv : 0) + b.pv, p2v = (sameSess ? s.p2v : 0) + b.p2v, v = (sameSess ? s.v : 0) + b.v;
+    if (v <= 0) { const k = S.bars.length - 1; return [S.vwap[k], S.vsd[k], S.sessStart[k]]; }
+    const vw = pv / v;
+    return [vw, Math.sqrt(Math.max(0, p2v / v - vw * vw)), sameSess ? s.start : S.bars.length];
+  }
+
+  // ------------------------------------------------------------ chart interaction
+  cv.addEventListener('pointerdown', e => {
+    const g = geom(), r = cv.getBoundingClientRect(), x = e.clientX - r.left;
+    cv.setPointerCapture(e.pointerId);
+    if (selecting) { const i = Math.max(0, Math.min(S.bars.length - 1, g.iOf(x))); selDrag = [i, i]; }
+    else drag = { x, end: view.follow ? g.end : view.end, bw: g.bw };
+  });
+  cv.addEventListener('pointermove', e => {
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    hover = { x, y };
+    if (selDrag) { const g = geom(); selDrag[1] = Math.max(0, Math.min(S.bars.length - 1, g.iOf(x))); }
+    else if (drag) {
+      const tot = total(), ne = drag.end - (x - drag.x) / drag.bw;
+      if (ne >= tot - 1 + Math.round(view.n * 0.12)) view.follow = true;
+      else { view.follow = false; view.end = Math.max(view.n * 0.3, ne); }
+    }
+    dirty = true;
+  });
+  const endPtr = () => {
+    if (selDrag) {
+      const a = Math.min(selDrag[0], selDrag[1]), b = Math.max(selDrag[0], selDrag[1]);
+      if (b - a >= 3) { custom = [a, b]; profMode = 'custom'; $('#profMode').value = 'custom'; }
+      selDrag = null; selecting = false; $('#selRange').setAttribute('aria-pressed', 'false');
+    }
+    drag = null; dirty = true;
+  };
+  cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr);
+  cv.addEventListener('pointerleave', () => { hover = null; dirty = true; });
+  cv.addEventListener('wheel', e => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); }, { passive: false });
+  cv.addEventListener('dblclick', () => { view.follow = true; dirty = true; });
+  function zoom(f) {
+    const g = geom(); if (!view.follow) view.end = g.end;
+    view.n = Math.max(30, Math.min(500, Math.round(view.n * f))); dirty = true;
+  }
+  $('#zoomIn').onclick = () => zoom(1 / 1.25); $('#zoomOut').onclick = () => zoom(1.25);
+  $('#live').onclick = () => { view.follow = true; dirty = true; };
+  document.querySelectorAll('.tog[data-layer]').forEach(b => b.onclick = () => {
+    const k = b.dataset.layer; layers[k] = !layers[k]; b.setAttribute('aria-pressed', layers[k]); dirty = true;
+  });
+  $('#profMode').onchange = e => {
+    profMode = e.target.value;
+    if (profMode === 'custom' && !custom) { selecting = true; $('#selRange').setAttribute('aria-pressed', 'true'); }
+    dirty = true;
+  };
+  $('#selRange').onclick = () => { selecting = !selecting; $('#selRange').setAttribute('aria-pressed', selecting); };
+
+  // ------------------------------------------------------------ side panels
+  function walls(bk, price, dir) {
+    if (!bk || !S.hasBook) return null;
+    let best = null;
+    for (let j = 0; j < bk.arr.length; j++) {
+      const p = (bk.base + j) * S.BIN; if (dir * (p - price) <= 0) continue;
+      const atr = S.lastEval ? S.lastEval.atr : S.BIN * 4;
+      if (Math.abs(p - price) > 6 * atr) continue;
+      if (bk.arr[j] >= 4 * bk.med && (!best || bk.arr[j] > best.sz)) best = { p, sz: bk.arr[j] };
+    }
+    return best;
+  }
+
+  function renderSignal() {
+    const e = S.lastEval, t = live ? openSignal() : S.active, el = $('#sigCard');
+    if (t) {
+      const r = live ? signalR(t, lastPrice()) : AF.liveR(S, lastPrice()), dir = t.dir > 0;
+      el.innerHTML = `<div class="sig-head"><span class="pill ${dir ? 'long' : 'short'}">${dir ? 'BUY' : 'SELL'}</span><span class="num ${r >= 0 ? 'up' : 'down'}">${r >= 0 ? '+' : ''}${r.toFixed(2)}R ${t.stage ? '· TP1 banked' : '· running'}</span></div>
+        <div class="sig-title">${esc(t.setup)} · score ${t.score}</div>
+        <div class="levels">
+          <div class="lv"><span>Entry</span><b>${fmt(t.entry)}</b><small>${tfmt(t.t)}</small></div>
+          <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + ' pips risk'}</small></div>
+          <div class="lv"><span>TP1</span><b class="up">${fmt(t.tp1)}</b><small>${esc(t.tp1Name)} · ${t.rr1.toFixed(1)}R</small></div>
+          <div class="lv"><span>TP2</span><b class="up">${fmt(t.tp2)}</b><small>${esc(t.tp2Name)} · ${t.rr2.toFixed(1)}R</small></div>
+        </div>
+        ${live ? `<p class="mt5">On your ${esc(t.broker)} MT5 (offset ${sgn(t.offset)}): entry <b>${m5(t, t.entry)}</b> · stop <b>${m5(t, t.sl)}</b> · TP1 <b>${m5(t, t.tp1)}</b> · TP2 <b>${m5(t, t.tp2)}</b></p>` : ''}
+        <p class="narr">${esc(t.narrative)}</p>`;
+      return;
+    }
+    const p = e.prof, price = lastPrice();
+    let where;
+    if (price > p.vah) where = `above value (VAH ${fmt(p.vah)})`;
+    else if (price < p.val) where = `below value (VAL ${fmt(p.val)})`;
+    else where = Math.abs(price - p.poc) < (p.vah - p.val) * 0.2 ? `pinned near the POC ${fmt(p.poc)}, the middle of value` : `inside value, between VAL ${fmt(p.val)} and VAH ${fmt(p.vah)}`;
+    const best = e.long.score >= e.short.score ? e.long : e.short;
+    let why;
+    if (!best.hasLocation) why = 'No edge at this price.';
+    else if (!best.hasTrigger) why = `The ${best.dir > 0 ? 'long' : 'short'} case has location but no trigger yet.`;
+    else if (best.score < S.params.threshold) why = `The ${best.dir > 0 ? 'long' : 'short'} case scores ${best.score}, below your ${S.params.threshold} threshold.`;
+    else if (best.rr1 < S.params.minRR) why = `Not enough room to TP1 (${best.rr1.toFixed(1)}R).`;
+    else why = 'Cooling down after the last trade.';
+    const bw = walls(S.liveBook || S.bars[e.k].book, price, -1), aw = walls(S.liveBook || S.bars[e.k].book, price, 1);
+    const sdOk = e.sdOk;
+    const lowEdge = sdOk ? Math.max(p.val, e.vw - e.sd) : p.val, hiEdge = sdOk ? Math.min(p.vah, e.vw + e.sd) : p.vah;
+    const last = (live ? ledger : S.trades).filter(x => x.result !== null).slice(-1)[0];
+    el.innerHTML = `<div class="sig-head"><span class="pill flat">STAND ASIDE</span><span class="muted num">${fmt(price)}</span></div>
+      <div class="sig-title">Price is ${where}.</div>
+      <p class="narr" style="margin-top:8px">${esc(why)} The engine wants price at an edge, a trigger there, and order flow that confirms.</p>
+      <ul class="watch">
+        <li class="l"><b>Long case</b> builds on a sweep below ${fmt(Math.min(lowEdge, price))}${bw ? `, ideally into the ${Math.round(bw.sz)}-lot bid wall at ${fmt(bw.p)}` : ''}, that closes back above. Target ${fmt(p.poc)} POC.</li>
+        <li class="s"><b>Short case</b> builds on a failed push above ${fmt(Math.max(hiEdge, price))}${aw ? `, ideally into the ${Math.round(aw.sz)}-lot ask wall at ${fmt(aw.p)}` : ''}, that closes back below. Target ${fmt(p.poc)} POC.</li>
+      </ul>
+      ${last ? `<p class="muted" style="font-size:12px;margin:10px 0 0">Last signal: ${last.dir > 0 ? 'buy' : 'sell'} at ${fmt(last.entry)}, ${esc(last.status.toLowerCase())}, <span class="${last.result >= 0 ? 'up' : 'down'}">${last.result >= 0 ? '+' : ''}${last.result.toFixed(2)}R</span>.</p>` : ''}`;
+  }
+
+  function renderConfluence() {
+    const e = S.lastEval, thr = S.params.threshold;
+    if (caseAuto) caseSide = e.long.score >= e.short.score ? 1 : -1;
+    const row = (name, c, col) => `<div class="meter"><span>${name}</span><div class="bar"><i style="width:${c.score}%;background:${col}"></i><span class="thr" style="left:${thr}%"></span></div><b class="num" style="text-align:right">${c.score}</b></div>`;
+    $('#meters').innerHTML = row('Long', e.long, C.up) + row('Short', e.short, C.down);
+    $('#caseL').setAttribute('aria-pressed', caseSide > 0); $('#caseS').setAttribute('aria-pressed', caseSide < 0);
+    const c = caseSide > 0 ? e.long : e.short;
+    $('#factors').innerHTML = c.factors.map(f => `<li><span class="fl">${esc(f.label)}</span><span class="fp ${f.pts ? 'on' : ''}">${f.na ? 'n/a' : `${f.pts}/${f.max}`}</span><span class="fd">${esc(f.detail)}</span></li>`).join('');
+  }
+  $('#caseL').onclick = () => { caseSide = 1; caseAuto = false; panelDirty = true; };
+  $('#caseS').onclick = () => { caseSide = -1; caseAuto = false; panelDirty = true; };
+
+  function renderRead() {
+    const e = S.lastEval, p = e.prof, price = lastPrice(), k = e.k;
+    const st = s => s.trend === 'up' ? '<span class="up">Up</span>' : s.trend === 'down' ? '<span class="down">Down</span>' : '<span class="muted">Undecided</span>';
+    const sig = e.sdOk && e.sd > 0 ? ((price - e.vw) / e.sd) : null;
+    let d10 = 0; for (let j = Math.max(0, k - 9); j <= k; j++) d10 += S.delta[j];
+    const bk = S.liveBook || S.bars[k].book;
+    const aw = walls(bk, price, 1), bw = walls(bk, price, -1);
+    const rows = [
+      [`${S.htfLabel} structure`, `${st(S.htf)}${S.htf.lastH ? ` · H ${fmt(S.htf.lastH.price)}` : ''}${S.htf.lastL ? ` · L ${fmt(S.htf.lastL.price)}` : ''}`],
+      [`${S.tfLabel} structure`, st(S.ltf)],
+      ['Value area', `${fmt(p.val)} · <span style="color:${C.gold}">${fmt(p.poc)}</span> · ${fmt(p.vah)}`],
+      ['VWAP', `${fmt(e.vw)}${sig !== null ? ` · ${sig >= 0 ? '+' : ''}${sig.toFixed(1)}σ` : ''}`],
+      ['ATR (14)', `${fmt(e.atr)} · ${Math.round(e.atr / S.pip)} pips`],
+      [`Delta, last 10 bars${S.hasFlow ? '' : ' (est.)'}`, `<span class="${d10 >= 0 ? 'up' : 'down'}">${d10 >= 0 ? '+' : ''}${Math.round(d10)}</span>`]
+    ];
+    if (S.hasBook) {
+      rows.push(['Nearest ask wall', aw ? `${fmt(aw.p)} · ${Math.round(aw.sz)} lots` : '–']);
+      rows.push(['Nearest bid wall', bw ? `${fmt(bw.p)} · ${Math.round(bw.sz)} lots` : '–']);
+    }
+    if (live) rows.push(['Your MT5 price', `${(price + cfg.offset).toFixed(2)} <span class="muted">(${esc(cfg.broker)} ${sgn(cfg.offset)})</span>`]);
+    $('#read').innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('');
+  }
+
+  function renderDOM() {
+    if (!S.hasBook || !S.liveBook) return;
+    const bk = S.liveBook, price = lastPrice(), cb = Math.round(price / S.BIN), N = 10;
+    let mx = 1;
+    for (let j = 0; j < bk.arr.length; j++) mx = Math.max(mx, bk.arr[j]);
+    const sz = bin => { const i = bin - bk.base; return i >= 0 && i < bk.arr.length ? bk.arr[i] : 0; };
+    let h = '';
+    for (let b = cb + N; b >= cb - N; b--) {
+      const s = sz(b), w = Math.min(100, s / mx * 100), wall = s >= 3 * bk.med, p = b * S.BIN;
+      if (b === cb) { h += `<div class="r mid"><div></div><div class="p">${fmt(price)}</div><div></div></div>`; continue; }
+      if (b > cb) h += `<div class="r${wall ? ' wall' : ''}"><div></div><div class="p">${fmt(p)}</div><div class="a"><i style="width:${w}%"></i><em>${Math.round(s)}</em></div></div>`;
+      else h += `<div class="r${wall ? ' wall' : ''}"><div class="b"><i style="width:${w}%"></i><em>${Math.round(s)}</em></div><div class="p">${fmt(p)}</div><div></div></div>`;
+    }
+    $('#dom').innerHTML = h;
+  }
+
+  function renderHeader() {
+    const price = lastPrice(), k = S.bars.length - 1; if (k < 0) return; const open = S.bars[S.sessStart[k]].o, ch = price - open;
+    $('#px').textContent = fmt(price);
+    $('#chg').textContent = `${ch >= 0 ? '+' : ''}${ch.toFixed(S.dec)} (${(ch / open * 100).toFixed(2)}%)`;
+    $('#chg').className = 'chg ' + (ch >= 0 ? 'up' : 'down');
+  }
+  function drawEquity(curve) {
+    const c = $('#eq'), r = c.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
+    c.width = Math.round(r.width * d); c.height = Math.round(r.height * d);
+    const x = c.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0);
+    const W = r.width, H = r.height, padL = 44, padR = 10, padT = 10, padB = 18;
+    x.clearRect(0, 0, W, H);
+    let lo = Math.min(0, ...curve), hi = Math.max(0, ...curve); if (hi - lo < 1) { hi += .5; lo -= .5; }
+    const X = i => padL + (curve.length > 1 ? i / (curve.length - 1) : 0) * (W - padL - padR), Y = v => padT + (hi - v) / (hi - lo) * (H - padT - padB);
+    x.font = '10px "IBM Plex Mono", monospace'; x.fillStyle = C.muted; x.textBaseline = 'middle'; x.textAlign = 'right';
+    const step = niceStep((hi - lo) / 4);
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+      x.strokeStyle = v === 0 ? C.faint : C.grid; x.beginPath(); x.moveTo(padL, Y(v) + .5); x.lineTo(W - padR, Y(v) + .5); x.stroke();
+      x.fillText(`${v > 0 ? '+' : ''}${+v.toFixed(1)}R`, padL - 6, Y(v));
+    }
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.fillStyle = C.faint; x.fillText('Equity in R, closed signals', padL, H - 4);
+    if (curve.length < 2) return;
+    const last = curve[curve.length - 1], col = last >= 0 ? C.up : C.down;
+    x.beginPath(); curve.forEach((v, i) => i ? x.lineTo(X(i), Y(v)) : x.moveTo(X(i), Y(v)));
+    x.lineTo(X(curve.length - 1), Y(0)); x.lineTo(X(0), Y(0)); x.closePath();
+    x.fillStyle = last >= 0 ? 'rgba(51,195,160,.14)' : 'rgba(238,106,90,.14)'; x.fill();
+    x.beginPath(); curve.forEach((v, i) => i ? x.lineTo(X(i), Y(v)) : x.moveTo(X(i), Y(v)));
+    x.strokeStyle = col; x.lineWidth = 1.6; x.stroke();
+    x.fillStyle = col; x.beginPath(); x.arc(X(curve.length - 1), Y(last), 3, 0, 7); x.fill();
+  }
+  // ============================================================ LIVE: settings, journal, feed
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem('aurum-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('aurum-' + k, JSON.stringify(v)); } catch { } }
+  };
+  const cfg = Object.assign({ broker: 'Exness', offset: 0, cost: 3, tgToken: '', tgChat: '', tgOn: false }, LS.get('cfg', {}));
+  const saveCfg = () => LS.set('cfg', cfg);
+  const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)}`;
+
+  // ---------------- live signal journal (this device)
+  let ledger = LS.get('ledger', []);
+  const saveLedger = () => LS.set('ledger', ledger.slice(-1000));
+  const openSignal = () => ledger.find(x => x.result === null) || null;
+  const signalR = (t, price) => { const r = t.dir * (price - t.entry) / t.risk; return t.stage ? t.realized + 0.5 * r : r; };
+  const costR = t => (t.cost * 0.1) / t.risk;
+
+  function addSignal(tr) {
+    const t = {
+      id: Date.now(), t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score, entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2,
+      tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2, narrative: tr.narrative, stage: 0, realized: 0,
+      status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + 60000, offset: cfg.offset, cost: cfg.cost, broker: cfg.broker
+    };
+    ledger.push(t); saveLedger(); notify('open', t); journalDirty = panelDirty = true;
+  }
+  function stepSignal(t, hi, lo, close, time) {
+    if (t.result !== null) return;
+    const d = t.dir, hit = p => d > 0 ? hi >= p : lo <= p, stopHit = d > 0 ? lo <= t.sl : hi >= t.sl, R = p => d * (p - t.entry) / t.risk;
+    if (t.stage === 0) {
+      if (stopHit) return closeSig(t, -1, 'Stopped out', time);
+      if (hit(t.tp1)) {
+        t.stage = 1; t.realized = 0.5 * R(t.tp1); t.sl = t.entry; saveLedger(); notify('tp1', t); journalDirty = panelDirty = true;
+        if (hit(t.tp2)) closeSig(t, t.realized + 0.5 * R(t.tp2), 'TP2 hit', time);
+        return;
+      }
+    } else {
+      if (stopHit) return closeSig(t, t.realized, 'TP1, rest at breakeven', time);
+      if (hit(t.tp2)) return closeSig(t, t.realized + 0.5 * R(t.tp2), 'TP2 hit', time);
+    }
+    if (time - t.t >= 240 * 60000) closeSig(t, t.stage ? t.realized + 0.5 * R(close) : R(close), 'Timed out', time);
+  }
+  function closeSig(t, gross, status, time) {
+    t.gross = gross; t.result = gross - costR(t); t.status = status; t.exitT = time; t.pips = t.result * t.risk / 0.1;
+    saveLedger(); notify('close', t); journalDirty = panelDirty = true;
+  }
+
+  // ---------------- Telegram
+  async function tg(text, force) {
+    if ((!cfg.tgOn && !force) || !cfg.tgToken || !cfg.tgChat) return false;
+    const url = `https://api.telegram.org/bot${encodeURIComponent(cfg.tgToken)}/sendMessage`;
+    const body = new URLSearchParams({ chat_id: cfg.tgChat, text, disable_web_page_preview: 'true' });
+    try { const r = await fetch(url, { method: 'POST', body }); return r.ok; }
+    catch { try { await fetch(url, { method: 'POST', body, mode: 'no-cors' }); return true; } catch { return false; } }
+  }
+  const m5 = (t, x) => (x + t.offset).toFixed(2);
+  function sigText(kind, t) {
+    const f = x => x.toFixed(2), side = t.dir > 0 ? 'BUY' : 'SELL';
+    if (kind === 'open') return `${side} XAUUSD · ${t.setup} · score ${t.score}\n` +
+      `Entry ${f(t.entry)} | SL ${f(t.sl0)} | TP1 ${f(t.tp1)} | TP2 ${f(t.tp2)}\n` +
+      `On ${t.broker} MT5 (offset ${sgn(t.offset)}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` +
+      `Risk ${Math.round(t.risk / 0.1)} pips · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
+    if (kind === 'tp1') return `TP1 hit: ${side} XAUUSD from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
+    return `${t.status}: ${side} XAUUSD from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} pips after costs.`;
+  }
+  function notify(kind, t) { if (live) tg(sigText(kind, t)); }
+
+  // ---------------- Binance USDⓈ-M XAUUSDT feed
+  const SYMBOL = 'XAUUSDT', sym = 'xauusdt', REST = 'https://fapi.binance.com';
+  const WS_PUBLIC = 'wss://fstream.binance.com/public/stream?streams=', WS_MARKET = 'wss://fstream.binance.com/market/stream?streams=';
+  const feed = { bids: new Map(), asks: new Map(), synced: false, snapId: null, lastU: null, buf: [], mode: 'diff', depthWs: null, tradeWs: null, clockOff: 0, lastTrade: 0, warm: false, pend: [], note: '', depthOk: false, tradeOk: false, snapBusy: false };
+  let live = true;
+
+  function connectDepth() {
+    const old = feed.depthWs; feed.depthWs = null; try { old && old.close(); } catch { }
+    feed.synced = false; feed.buf = []; feed.snapId = null; feed.lastU = null;
+    const ws = new WebSocket(WS_PUBLIC + (feed.mode === 'diff' ? `${sym}@depth@100ms` : `${sym}@depth20@100ms`));
+    feed.depthWs = ws;
+    ws.onopen = () => { feed.depthOk = true; if (feed.mode === 'diff') snapshot(); };
+    ws.onmessage = m => { if (feed.depthWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } onDepth(d.data || d); };
+    ws.onclose = () => { if (feed.depthWs === ws) { feed.depthOk = false; setTimeout(connectDepth, 3000); } };
+    ws.onerror = () => { try { ws.close(); } catch { } };
+  }
+  async function snapshot() {
+    if (feed.snapBusy) return; feed.snapBusy = true;
+    try {
+      const r = await fetch(`${REST}/fapi/v1/depth?symbol=${SYMBOL}&limit=1000`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const s = await r.json();
+      feed.bids = new Map(s.bids.map(([p, q]) => [p, +q])); feed.asks = new Map(s.asks.map(([p, q]) => [p, +q]));
+      feed.snapId = s.lastUpdateId; feed.synced = false;
+      const buf = feed.buf; feed.buf = [];
+      for (const ev of buf) applyDiff(ev);
+    } catch (e) {
+      feed.mode = 'partial'; feed.note = 'The full order book snapshot was blocked, so the book shows the top 20 levels each side.';
+      feed.snapBusy = false; connectDepth(); return;
+    }
+    feed.snapBusy = false;
+  }
+  function applyLevels(map, levels) { for (const [p, q] of levels || []) { const v = +q; if (v === 0) map.delete(p); else map.set(p, v); } }
+  function resync(ev) { feed.synced = false; feed.snapId = null; feed.buf = ev ? [ev] : []; snapshot(); }
+  function applyDiff(ev) {
+    if (feed.snapId === null) { feed.buf.push(ev); if (feed.buf.length > 3000) feed.buf.shift(); return; }
+    if (!feed.synced) {
+      if (ev.u < feed.snapId) return;
+      if (ev.U > feed.snapId) return resync(ev);
+      feed.synced = true;
+    } else if (ev.pu !== feed.lastU) return resync(ev);
+    applyLevels(feed.bids, ev.b); applyLevels(feed.asks, ev.a); feed.lastU = ev.u;
+  }
+  function onDepth(d) {
+    if (feed.mode === 'partial') {
+      feed.bids = new Map((d.b || d.bids || []).map(([p, q]) => [p, +q]));
+      feed.asks = new Map((d.a || d.asks || []).map(([p, q]) => [p, +q]));
+      feed.synced = true; return;
+    }
+    if (d.e === 'depthUpdate') applyDiff(d);
+  }
+  function midPrice() {
+    let bb = -Infinity, ba = Infinity;
+    for (const p of feed.bids.keys()) { const v = +p; if (v > bb) bb = v; }
+    for (const p of feed.asks.keys()) { const v = +p; if (v < ba) ba = v; }
+    if (isFinite(bb) && isFinite(ba) && ba > bb) return (bb + ba) / 2;
+    return S && S.cur ? S.cur.c : null;
+  }
+  function bookSnap() {
+    if (!feed.bids.size && !feed.asks.size) return null;
+    const mid = midPrice(); if (!mid) return null;
+    const BIN = S.BIN, cb = Math.round(mid / BIN), base = cb - 40, arr = new Float32Array(81);
+    const add = map => { for (const [p, q] of map) { const j = Math.round(+p / BIN) - base; if (j >= 0 && j < 81) arr[j] += q; } };
+    add(feed.bids); add(feed.asks);
+    const nz = Array.from(arr).filter(v => v > 0).sort((a, b) => a - b);
+    return { base, arr, med: nz.length ? nz[nz.length >> 1] : 1 };
+  }
+
+  function connectTrades() {
+    const old = feed.tradeWs; feed.tradeWs = null; try { old && old.close(); } catch { }
+    const ws = new WebSocket(WS_MARKET + `${sym}@aggTrade`); feed.tradeWs = ws;
+    ws.onopen = () => { feed.tradeOk = true; };
+    ws.onmessage = m => { if (feed.tradeWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } d = d.data || d; if (d.e === 'aggTrade') onTrade(d); };
+    ws.onclose = () => { if (feed.tradeWs === ws) { feed.tradeOk = false; setTimeout(connectTrades, 3000); } };
+    ws.onerror = () => { try { ws.close(); } catch { } };
+  }
+  function onTrade(d) {
+    feed.clockOff = d.E - Date.now(); feed.lastTrade = Date.now();
+    if (!feed.warm) { feed.pend.push(d); if (feed.pend.length > 20000) feed.pend.shift(); return; }
+    if (live) ingest(+d.p, +d.q, d.m, d.T);
+  }
+  function newBar(t, p) { S.cur = { t, o: p, h: p, l: p, c: p, v: 0, bv: 0, sv: 0, pv: 0, p2v: 0, fp: new Map(), book: null }; }
+  function closeCurrent() {
+    const bar = S.cur; bar.book = bookSnap() || S.liveBook;
+    const before = S.trades.length;
+    AF.closeBar(S, bar);
+    if (S.trades.length > before) { const tr = S.trades[S.trades.length - 1]; if (tr.k >= S.liveFrom && !openSignal()) addSignal(tr); }
+    const o = openSignal(); if (o) { o.lastSeen = bar.t + 60000; saveLedger(); }
+    newBar(bar.t + 60000, bar.c);
+    panelDirty = journalDirty = dirty = true;
+  }
+  function rollTo(t) { let n = 0; while (S.cur && t >= S.cur.t + 60000 && n++ < 600) closeCurrent(); }
+  function ingest(p, q, sellerAgg, t) {
+    rollTo(t);
+    const b = S.cur; if (!b || t < b.t) return;
+    b.c = p; if (p > b.h) b.h = p; if (p < b.l) b.l = p;
+    const bv = sellerAgg ? 0 : q, sv = sellerAgg ? q : 0;
+    b.v += q; b.bv += bv; b.sv += sv; b.pv += p * q; b.p2v += p * p * q;
+    const bin = Math.round(p / S.BIN), f = b.fp.get(bin); if (f) { f[0] += bv; f[1] += sv; } else b.fp.set(bin, [bv, sv]);
+    const o = openSignal(); if (o) stepSignal(o, p, p, p, t);
+    dirty = true;
+  }
+
+  async function warmup() {
+    live = true; feed.warm = false;
+    S = AF.createStore({ mode: 'live', symbol: 'XAUUSD', bin: 0.5, pip: 0.1, dec: 2, interval: 60000, htfMult: 15 });
+    readParams(S.params);
+    let rows = [];
+    try {
+      const r = await fetch(`${REST}/fapi/v1/klines?symbol=${SYMBOL}&interval=1m&limit=1000`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      rows = await r.json();
+    } catch { feed.note = 'Price history could not load, so the engine is building from live trades only. Signals start after about two hours.'; }
+    const now = Date.now() + feed.clockOff;
+    let curK = null;
+    for (const k of rows) {
+      const [t, o, h, l, c, v, ct, , , tbv] = k.map(Number);
+      if (ct >= now) { curK = { t, o, h, l, c, v, tbv }; continue; }
+      const tp = (h + l + c) / 3, rg = h - l;
+      AF.closeBar(S, { t, o, h, l, c, v, bv: tbv, sv: v - tbv, pv: tp * v, p2v: v * (tp * tp + rg * rg / 12), fp: null, book: null });
+    }
+    S.liveFrom = S.bars.length;
+    if (curK) {
+      newBar(curK.t, curK.o);
+      const b = S.cur, tp = (curK.h + curK.l + curK.c) / 3, rg = curK.h - curK.l;
+      Object.assign(b, { h: curK.h, l: curK.l, c: curK.c, v: curK.v, bv: curK.tbv, sv: curK.v - curK.tbv, pv: tp * curK.v, p2v: curK.v * (tp * tp + rg * rg / 12) });
+      const lo = Math.round(curK.l / S.BIN), hi = Math.round(curK.h / S.BIN), n = hi - lo + 1, loc = rg > 0 ? (curK.c - curK.l) / rg : 0.5;
+      for (let x = lo; x <= hi; x++) b.fp.set(x, [curK.v / n * loc, curK.v / n * (1 - loc)]);
+    } else {
+      const p0 = feed.pend.length ? +feed.pend[0].p : (S.bars.length ? S.bars[S.bars.length - 1].c : 0);
+      newBar(Math.floor(now / 60000) * 60000, p0);
+    }
+    // settle any signal left open from an earlier session against the bars missed while away
+    const o = openSignal();
+    if (o) { for (const b of S.bars) if (b.t + 60000 > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + 60000); if (o.result === null) { o.lastSeen = now; saveLedger(); } }
+    feed.warm = true;
+    const pend = feed.pend.sort((a, b) => a.T - b.T); feed.pend = [];
+    for (const d of pend) if (d.T >= S.cur.t) ingest(+d.p, +d.q, d.m, d.T);
+    S.liveBook = bookSnap();
+    view.follow = true; custom = null;
+    afterRebuild();
+  }
+
+  setInterval(() => {
+    if (!feed.warm || !live || !S.cur) return;
+    const now = Date.now() + feed.clockOff;
+    if (now >= S.cur.t + 61500) rollTo(now);
+    const bk = bookSnap(); if (bk) { S.liveBook = bk; if (layers.heat) dirty = true; }
+  }, 250);
+
+  function feedState() {
+    if (!live) return { cls: '', text: 'Backtest' };
+    const quiet = feed.lastTrade && Date.now() - feed.lastTrade > 5 * 60000;
+    if (!feed.tradeOk && !feed.depthOk) return { cls: 'bad', text: 'Reconnecting…' };
+    if (!feed.warm) return { cls: 'warn', text: 'Loading history…' };
+    if (quiet) return { cls: 'warn', text: 'Market quiet or closed' };
+    if (!feed.synced) return { cls: 'warn', text: 'Syncing order book…' };
+    return { cls: 'ok', text: feed.mode === 'diff' ? 'Live · full book' : 'Live · top 20 levels' };
+  }
+  function renderFeed() {
+    const s = feedState(), el = $('#src');
+    el.textContent = s.text; el.className = 'chip feed ' + s.cls;
+    const n = $('#feedNote'); n.hidden = !feed.note || !live; n.textContent = feed.note;
+  }
+
+  // ---------------- setup panel
+  $('#setupBtn').onclick = () => { const s = $('#setup'); s.hidden = !s.hidden; $('#setupBtn').setAttribute('aria-expanded', !s.hidden); };
+  $('#broker').value = cfg.broker; $('#cost').value = cfg.cost; $('#tgToken').value = cfg.tgToken; $('#tgChat').value = cfg.tgChat; $('#tgOn').checked = cfg.tgOn;
+  const showOff = () => { $('#offv').textContent = sgn(cfg.offset); };
+  showOff();
+  $('#broker').onchange = e => { cfg.broker = e.target.value; saveCfg(); };
+  $('#cost').onchange = e => { const v = parseFloat(e.target.value); cfg.cost = isFinite(v) && v >= 0 ? v : 3; e.target.value = cfg.cost; saveCfg(); };
+  $('#calib').onclick = () => {
+    const v = parseFloat(String($('#mt5px').value).replace(',', '.'));
+    const ref = midPrice() || (S.cur && S.cur.c);
+    if (!isFinite(v) || !ref) { $('#calMsg').textContent = 'Type the price shown on your MT5 chart first.'; return; }
+    const off = v - ref;
+    if (Math.abs(off) > 50) { $('#calMsg').textContent = `That is ${off.toFixed(2)} away from Binance (${ref.toFixed(2)}). Check you typed the XAUUSD price.`; return; }
+    cfg.offset = Math.round(off * 100) / 100; saveCfg(); showOff();
+    $('#calMsg').textContent = `Matched: your ${cfg.broker} price is ${sgn(cfg.offset)} from Binance (${ref.toFixed(2)}).`;
+    panelDirty = true;
+  };
+  $('#tgToken').onchange = e => { cfg.tgToken = e.target.value.trim(); saveCfg(); };
+  $('#tgChat').onchange = e => { cfg.tgChat = e.target.value.trim(); saveCfg(); };
+  $('#tgOn').onchange = e => { cfg.tgOn = e.target.checked; saveCfg(); };
+  $('#tgFind').onclick = async () => {
+    cfg.tgToken = $('#tgToken').value.trim(); saveCfg();
+    if (!cfg.tgToken) { $('#tgMsg').textContent = 'Paste the bot token first.'; return; }
+    $('#tgMsg').textContent = 'Looking for your chat…';
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${encodeURIComponent(cfg.tgToken)}/getUpdates`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.description || 'Token not accepted');
+      const msg = (j.result || []).reverse().map(u => u.message || u.my_chat_member || u.channel_post).find(Boolean);
+      if (!msg) { $('#tgMsg').textContent = 'No messages yet. Open your bot in Telegram, press Start, then try again.'; return; }
+      cfg.tgChat = String(msg.chat.id); $('#tgChat').value = cfg.tgChat; cfg.tgOn = true; $('#tgOn').checked = true; saveCfg();
+      $('#tgMsg').textContent = `Found chat ${cfg.tgChat}. Alerts are on.`;
+    } catch (ex) { $('#tgMsg').textContent = `Could not read updates (${ex.message}). Check the token, or open api.telegram.org/bot<token>/getUpdates in a tab and copy the chat id.`; }
+  };
+  $('#tgTest').onclick = async () => {
+    cfg.tgToken = $('#tgToken').value.trim(); cfg.tgChat = $('#tgChat').value.trim(); saveCfg();
+    const ok = await tg(`Aurum Flow test alert. Price now ${fmt(lastPrice())} on Binance, ${(lastPrice() + cfg.offset).toFixed(2)} on your ${cfg.broker} MT5.`, true);
+    $('#tgMsg').textContent = ok ? 'Test sent. Check Telegram.' : 'Sending failed. Check the token and chat ID.';
+  };
+
+  // ---------------- journal (live signals)
+  function ledgerStats(closed) {
+    let wins = 0, losses = 0, be = 0, netR = 0, netPips = 0, gp = 0, gl = 0, peak = 0, dd = 0; const curve = [0];
+    for (const t of closed) {
+      if (t.result > 0.05) wins++; else if (t.result < -0.05) losses++; else be++;
+      netR += t.result; netPips += t.pips; if (t.result > 0) gp += t.result; else gl -= t.result;
+      curve.push(netR); peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR);
+    }
+    const n = closed.length;
+    return { n, wins, losses, be, winRate: n ? wins / n : 0, netR, netPips, exp: n ? netR / n : 0, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), maxDD: dd, curve };
+  }
+  function renderJournal() {
+    if (!live) {
+      const st = AF.stats(S);
+      $('#notice').textContent = `Backtest on your file: ${S.bars.length} bars of ${S.tfLabel} data. The order-book factor is excluded and delta is estimated. Past results do not predict future results.`;
+      return renderTable(st, S.trades.slice().reverse().map(t => ({ ...t, open: t.result === null, rNow: t.result === null ? AF.liveR(S, lastPrice()) : t.result })));
+    }
+    const closed = ledger.filter(x => x.result !== null), st = ledgerStats(closed);
+    const since = ledger.length ? new Date(ledger[0].t).toLocaleDateString([], { dateStyle: 'medium' }) : null;
+    const bt = S.trades.filter(t => t.k < S.liveFrom && t.result !== null), btR = bt.reduce((a, t) => a + t.result, 0);
+    $('#notice').textContent = `Live forward test on Binance XAUUSDT order flow${since ? `, recorded on this device since ${since}` : ''}. Each result subtracts ${cfg.cost} pips for spread and costs. ` +
+      `For context, on the last ${S.liveFrom} minutes of history the engine would have taken ${bt.length} signal${bt.length === 1 ? '' : 's'} (${btR >= 0 ? '+' : ''}${btR.toFixed(1)}R before costs).`;
+    renderTable(st, ledger.slice().reverse().map(t => ({ ...t, open: t.result === null, rNow: t.result === null ? signalR(t, lastPrice()) : t.result })));
+  }
+  function renderTable(st, rows) {
+    const tiles = [
+      ['Closed signals', st.n], ['Win rate', st.n ? Math.round(st.winRate * 100) + '%' : '–'],
+      ['Expectancy', st.n ? `${st.exp >= 0 ? '+' : ''}${st.exp.toFixed(2)}R` : '–'],
+      ['Net result', `<span class="${st.netR >= 0 ? 'up' : 'down'}">${st.netR >= 0 ? '+' : ''}${st.netR.toFixed(1)}R</span>`],
+      ['Net pips', `<span class="${st.netPips >= 0 ? 'up' : 'down'}">${st.netPips >= 0 ? '+' : ''}${Math.round(st.netPips)}</span>`],
+      ['Profit factor', st.pf === Infinity ? '∞' : st.pf.toFixed(2)], ['Max drawdown', `${st.maxDD.toFixed(1)}R`],
+      ['W / BE / L', `${st.wins} / ${st.be} / ${st.losses}`]
+    ];
+    $('#stats').innerHTML = tiles.map(([a, b]) => `<div class="stat"><span>${a}</span><b>${b}</b></div>`).join('');
+    $('#tbody').innerHTML = rows.slice(0, 300).map((t, i) => `<tr class="${t.open ? 'open' : ''}"><td class="num">${rows.length - i}</td><td class="num">${tfmt(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td>${esc(t.setup)}</td><td class="num">${t.score}</td><td class="num">${fmt(t.entry)}</td><td class="num">${fmt(t.sl0)}</td><td class="num">${fmt(t.tp1)}</td><td class="num">${fmt(t.tp2)}</td><td class="num ${t.rNow >= 0 ? 'up' : 'down'}">${t.rNow >= 0 ? '+' : ''}${t.rNow.toFixed(2)}R</td><td class="num">${t.open ? '–' : Math.round(t.pips)}</td><td>${esc(t.status)}</td></tr>`).join('')
+      || `<tr><td colspan="12" class="muted">No live signals yet. The engine waits for an edge, a trigger and confirming order flow. Leave the page open; signals are recorded here and sent to Telegram.</td></tr>`;
+    drawEquity(st.curve);
+  }
+  $('#csvOut').onclick = () => {
+    const head = 'time_utc,side,setup,score,entry,stop,tp1,tp2,mt5_offset,status,result_R,pips_after_costs,exit_time_utc\n';
+    const body = ledger.map(t => [new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.setup, t.score, t.entry, t.sl0, t.tp1, t.tp2, t.offset, t.status,
+      t.result === null ? '' : t.result.toFixed(3), t.pips === null ? '' : Math.round(t.pips), t.exitT ? new Date(t.exitT).toISOString() : ''].join(',')).join('\n');
+    saveFile(new Blob([head + body], { type: 'text/csv' }), `aurum-journal-${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+  function saveFile(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+
+  // ---------------- share signal as an image
+  function wrap(x, text, maxW) {
+    const words = String(text).split(/\s+/), lines = []; let line = '';
+    for (const w of words) { const t = line ? line + ' ' + w : w; if (x.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t; }
+    if (line) lines.push(line); return lines;
+  }
+  async function shareSignal() {
+    const t = openSignal(), W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'), F = 'Barlow, system-ui, sans-serif', FM = '"IBM Plex Mono", ui-monospace, monospace';
+    x.fillStyle = C.bg; x.fillRect(0, 0, W, H);
+    x.fillStyle = C.gold; x.font = `700 40px ${F}`; x.fillText('Aurum Flow', 56, 84);
+    x.fillStyle = C.muted; x.font = `400 26px ${F}`; x.fillText(`XAUUSD · order flow · ${new Date().toUTCString().slice(5, 22)} UTC`, 56, 124);
+    let y = 196;
+    const side = t ? (t.dir > 0 ? 'BUY' : 'SELL') : 'STAND ASIDE', col = t ? (t.dir > 0 ? C.up : C.down) : C.muted;
+    x.fillStyle = col; x.font = `700 64px ${F}`; x.fillText(side, 56, y);
+    x.fillStyle = C.fg; x.font = `500 30px ${F}`; x.fillText(t ? `${t.setup} · score ${t.score}` : 'No edge at this price', 56 + x.measureText(side).width * 0 + 0, y + 48);
+    y += 84;
+    x.drawImage(cv, 0, 0, cv.width, cv.height, 40, y, W - 80, Math.round((W - 80) * cv.height / cv.width));
+    y += Math.round((W - 80) * cv.height / cv.width) + 40;
+    if (t) {
+      const cells = [['Entry', t.entry], ['Stop', t.sl0], ['TP1', t.tp1], ['TP2', t.tp2]], cw = (W - 112) / 4;
+      cells.forEach(([k, v], i) => {
+        const cx = 56 + i * cw;
+        x.fillStyle = C.muted; x.font = `600 22px ${F}`; x.fillText(k.toUpperCase(), cx, y);
+        x.fillStyle = i === 1 ? C.down : i > 1 ? C.up : C.fg; x.font = `500 36px ${FM}`; x.fillText(v.toFixed(2), cx, y + 44);
+        x.fillStyle = C.muted; x.font = `400 22px ${FM}`; x.fillText(`MT5 ${m5(t, v)}`, cx, y + 76);
+      });
+      y += 124;
+      x.fillStyle = C.muted; x.font = `400 24px ${F}`; x.fillText(`Risk ${Math.round(t.risk / 0.1)} pips · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R · MT5 offset ${sgn(t.offset)} (${t.broker})`, 56, y); y += 46;
+    }
+    x.fillStyle = '#c9d1df'; x.font = `400 27px ${F}`;
+    const e = S.lastEval, txt = t ? t.narrative : (e ? `Value area ${fmt(e.prof.val)} to ${fmt(e.prof.vah)}, POC ${fmt(e.prof.poc)}, VWAP ${fmt(e.vw)}. Long case: a sweep below ${fmt(e.prof.val)} that closes back inside with buyers absorbing. Short case: a failed push above ${fmt(e.prof.vah)} that closes back inside with sellers absorbing. Target the POC either way.` : '');
+    for (const ln of wrap(x, txt, W - 112).slice(0, Math.max(2, Math.floor((H - 90 - y) / 38)))) { x.fillText(ln, 56, y); y += 38; }
+    x.fillStyle = C.faint; x.font = `400 22px ${F}`; x.fillText('Forward-test signal. Not financial advice.', 56, H - 48);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    const file = new File([blob], `aurum-${side.toLowerCase().replace(' ', '-')}-${Date.now()}.png`, { type: 'image/png' });
+    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: t ? sigText('open', t) : 'Aurum Flow: stand aside' }); return; } } catch (ex) { if (ex && ex.name === 'AbortError') return; }
+    saveFile(blob, file.name);
+  }
+  $('#share').onclick = () => shareSignal();
+
+  // ---------------- controls shared with the sim build
+  $('#thr').oninput = e => { S.params.threshold = +e.target.value; $('#thrv').textContent = e.target.value; S.lastEval = reEval(); panelDirty = true; };
+  $('#lookback').onchange = e => { S.params.lookback = +e.target.value; S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
+  const keepLive = N => { N.liveFrom = S.liveFrom; N.cur = S.cur; N.liveBook = S.liveBook; return N; };
+  $('#rerun').onclick = () => { S = keepLive(AF.rebuild(S)); afterRebuild(); };
+  const readParams = P => { P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; };
+  $('#trigMode').onchange = $('#useHTF').onchange = () => { readParams(S.params); S = keepLive(AF.rebuild(S)); afterRebuild(); };
+  const reEval = () => S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
+  document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
+    $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules';
+    if (t.dataset.tab === 'journal') journalDirty = true;
+  });
+  $('#csv').onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    const err = $('#err'); err.hidden = true;
+    try {
+      const rows = AF.parseCSV(await file.text());
+      const name = file.name.replace(/\.(csv|txt|tsv)$/i, '').slice(0, 24);
+      const N = AF.csvStore(rows, name); readParams(N.params);
+      live = false; S = AF.rebuild(N);
+      $('#sym').textContent = name; $('#toLive').hidden = false; $('#domCard').hidden = true; layers.heat = false;
+      document.querySelector('[data-layer="heat"]').setAttribute('aria-pressed', 'false');
+      view.follow = true; custom = null; profMode = 'engine'; $('#profMode').value = 'engine';
+      afterRebuild();
+    } catch (ex) { err.textContent = `Could not read that file. ${ex.message} Export bars as CSV with time, open, high, low, close and volume columns (MT5 and TradingView exports work).`; err.hidden = false; }
+    e.target.value = '';
+  };
+  $('#toLive').onclick = () => {
+    $('#toLive').hidden = true; $('#domCard').hidden = false; $('#sym').textContent = 'XAUUSD'; layers.heat = true;
+    document.querySelector('[data-layer="heat"]').setAttribute('aria-pressed', 'true');
+    warmup();
+  };
+
+  // ---------------- main loop
+  let lastPanel = 0, lastJournal = 0;
+  function loop(ts) {
+    if (S && (S.bars.length || S.cur)) {
+      if (dirty) { try { draw(); } catch (ex) { console.error(ex); } dirty = false; }
+      if (ts - lastPanel > 250 || panelDirty) {
+        renderFeed();
+        if (S.lastEval) { renderHeader(); renderSignal(); renderDOM(); if (panelDirty) { renderConfluence(); renderRead(); } }
+        panelDirty = false; lastPanel = ts;
+      }
+      if (journalDirty || (openSignal() && ts - lastJournal > 1500)) {
+        if (!$('#pane-journal').hidden) renderJournal();
+        journalDirty = false; lastJournal = ts;
+      }
+    } else if (ts - lastPanel > 250) { renderFeed(); lastPanel = ts; }
+    requestAnimationFrame(loop);
+  }
+
+  if (window.innerWidth < 640) view.n = 70;
+  resize();
+  connectTrades();
+  connectDepth();
+  warmup();
+  requestAnimationFrame(loop);
+})();
+
+</script>
+
+</body>
+</html>
