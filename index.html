@@ -1764,7 +1764,7 @@ const AF = (() => {
           ingest(inst, p, 1, up < 0 ? true : up > 0 ? false : Math.random() < 0.5, t);
         }
       }
-      if (d.req_id && deriv.pending.has(d.req_id)) { const p = deriv.pending.get(d.req_id); deriv.pending.delete(d.req_id); d.error ? p.rej(new Error(d.error.message || 'Deriv error')) : p.res(d); }
+      if (d.req_id && deriv.pending.has(d.req_id)) { const p = deriv.pending.get(d.req_id); deriv.pending.delete(d.req_id); d.error ? p.rej(Object.assign(new Error(d.error.message || 'Deriv error'), { code: d.error.code })) : p.res(d); }
     };
     ws.onclose = () => { deriv.ok = false; if (!opened) deriv.idx = (deriv.idx + 1) % DERIV_URLS.length; if (deriv.ws === ws) setTimeout(derivConnect, 3000); };
     ws.onerror = () => { try { ws.close(); } catch { } };
@@ -2078,29 +2078,50 @@ const AF = (() => {
   $('#share').onclick = () => shareSignal();
 
   // ---------------- history test for the selected market
-  async function historyBars(inst, days, say) {
-    const end = Date.now() + inst.clockOff, start = end - days * 86400e3, out = [];
+  // downloaded 1-minute history is kept for this session, so a rerun or a longer period only fetches what is missing
+  const histCache = {};
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const isRateLimit = e => e && (e.code === 'RateLimit' || /rate limit/i.test(e.message || ''));
+  async function fetchRange(inst, a, b, progress, say) {
+    const out = [];
     if (inst.def.src === 'binance') {
-      let t = start;
-      while (t < end - 60000) {
-        const rows = await binFetchKlines(inst.def.sym, t, end, 1500, 1); if (!rows.length) break;
+      let t = a;
+      while (t < b - 60000) {
+        const rows = await binFetchKlines(inst.def.sym, t, b, 1500, 1); if (!rows.length) break;
         out.push(...rows); const next = rows[rows.length - 1].t + 60000; if (next <= t) break; t = next;
-        say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((t - start) / (end - start) * 100))}%`);
-        await new Promise(r => setTimeout(r, 120));
+        progress(t - a); await sleep(120);
       }
     } else {
-      let s = Math.floor(start / 1000); const e = Math.floor(end / 1000);
+      let s = Math.floor(a / 1000); const e = Math.floor(b / 1000);
       while (s < e - 60) {
         const to = Math.min(e, s + 15 * 3600);
-        const { bars } = await derivCandles(inst.def.sym, s, to, 1);
-        out.push(...bars);
-        s = to;
-        say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((s * 1000 - start) / (end - start) * 100))}%`);
-        await new Promise(r => setTimeout(r, 120));
+        for (let attempt = 0; ; attempt++) {
+          try { const { bars } = await derivCandles(inst.def.sym, s, to, 1); out.push(...bars); break; }
+          catch (ex) {
+            if (!isRateLimit(ex) || attempt >= 8) throw ex;
+            for (let w = 65; w > 0; w--) { say(`Deriv asked us to slow down. Resuming in ${w}s. Nothing downloaded so far is lost.`); await sleep(1000); }
+          }
+        }
+        s = to; progress(s * 1000 - a); await sleep(450);
       }
     }
-    out.sort((a, b) => a.t - b.t);
-    return out.filter((b, i) => b.t + 60000 <= end && (i === 0 || b.t !== out[i - 1].t));
+    return out;
+  }
+  async function historyBars(inst, days, say) {
+    const end = Date.now() + inst.clockOff, start = end - days * 86400e3, id = inst.def.id;
+    const c = histCache[id];
+    const ranges = !c || c.to < start ? [[start, end]] : [start < c.from ? [start, c.from] : null, [c.to, end]].filter(Boolean);
+    const total = ranges.reduce((s, [a, b]) => s + (b - a), 0); let done = 0;
+    for (const [a, b] of ranges) {
+      if (b - a < 60000) continue;
+      const base = done;
+      const got = await fetchRange(inst, a, b, d => say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((base + d) / total * 100))}%`), say);
+      done += b - a;
+      const prev = histCache[id] && histCache[id].to >= start ? histCache[id] : { from: a, to: a, bars: [] };
+      const merged = prev.bars.concat(got).sort((x, y) => x.t - y.t).filter((x, i, arr) => i === 0 || x.t !== arr[i - 1].t);
+      histCache[id] = { from: Math.min(prev.from, a), to: Math.max(prev.to, b), bars: merged };
+    }
+    return (histCache[id] ? histCache[id].bars : []).filter(x => x.t >= start && x.t + 60000 <= end);
   }
   function summarize(cl, days, splitT) {
     const early = cl.filter(t => t.t < splitT), late = cl.filter(t => t.t >= splitT), avg = a => a.length ? a.reduce((s, t) => s + t.net, 0) / a.length : null;
