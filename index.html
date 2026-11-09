@@ -306,7 +306,7 @@ tr.open td{background:var(--gold-soft)}
     <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, rebuilt into 1, 3, 5 and 15-minute entries, each with the day-type filter on and off, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
-    <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th></tr></thead><tbody id="histBody"></tbody></table></div>
+    <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
   </div>
   <div class="pane" id="pane-rules" hidden>
     <div class="rules">
@@ -2091,21 +2091,23 @@ const AF = (() => {
     } else {
       let s = Math.floor(start / 1000); const e = Math.floor(end / 1000);
       while (s < e - 60) {
-        const to = Math.min(e, s + 3 * 86400);
+        const to = Math.min(e, s + 15 * 3600);
         const { bars } = await derivCandles(inst.def.sym, s, to, 1);
-        for (const b of bars) if (!out.length || b.t > out[out.length - 1].t) out.push(b);
+        out.push(...bars);
         s = to;
         say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((s * 1000 - start) / (end - start) * 100))}%`);
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 120));
       }
     }
-    return out.filter(b => b.t + 60000 <= end);
+    out.sort((a, b) => a.t - b.t);
+    return out.filter((b, i) => b.t + 60000 <= end && (i === 0 || b.t !== out[i - 1].t));
   }
-  function summarize(cl, days) {
+  function summarize(cl, days, splitT) {
+    const early = cl.filter(t => t.t < splitT), late = cl.filter(t => t.t >= splitT), avg = a => a.length ? a.reduce((s, t) => s + t.net, 0) / a.length : null;
     let wins = 0, netR = 0, gp = 0, gl = 0, peak = 0, dd = 0; const L = { n: 0, r: 0 }, Sh = { n: 0, r: 0 };
     for (const t of cl) { if (t.net > 0.05) wins++; netR += t.net; if (t.net > 0) gp += t.net; else gl -= t.net; peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR); const g = t.dir > 0 ? L : Sh; g.n++; g.r += t.net; }
     const n = cl.length;
-    return { n, perDay: n / days, wr: n ? wins / n : 0, exp: n ? netR / n : 0, netR, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), dd, L, Sh };
+    return { n, perDay: n / days, wr: n ? wins / n : 0, exp: n ? netR / n : 0, netR, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), dd, L, Sh, e1: avg(early), n1: early.length, e2: avg(late), n2: late.length };
   }
   function aggregate(bars, tfMin) {
     if (tfMin === 1) return bars;
@@ -2118,14 +2120,14 @@ const AF = (() => {
     }
     return out;
   }
-  async function runVariant(inst, bars, params, say, label, days, tfMin) {
+  async function runVariant(inst, bars, params, say, label, days, tfMin, splitT) {
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tfMin * 60000, htfMult: HTF_MULT[tfMin] });
     Object.assign(T.params, params);
     for (let i = 0; i < bars.length; i++) {
       AF.closeBar(T, bars[i]);
       if (i % 2500 === 0) { say(`Testing ${label}… ${Math.round(i / bars.length * 100)}%`); await new Promise(r => setTimeout(r)); }
     }
-    return summarize(T.trades.filter(t => t.result !== null).map(t => ({ dir: t.dir, net: t.result - params.costPrice / t.risk })), days);
+    return summarize(T.trades.filter(t => t.result !== null).map(t => ({ t: t.t, dir: t.dir, net: t.result - params.costPrice / t.risk })), days, splitT);
   }
   let histBusy = false;
   $('#histRun').onclick = async () => {
@@ -2135,21 +2137,23 @@ const AF = (() => {
       const m1 = await historyBars(inst, days, say);
       if (m1.length < 500) throw new Error('not enough history came back');
       const base = { ...inst.S.params }; readParams(base, inst);
-      const res = [];
+      const res = [], splitT = m1[0].t + (m1[m1.length - 1].t - m1[0].t) * 2 / 3;
       for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
           const name = `${tf}m entries · day-type filter ${onOff ? 'on' : 'off'}`;
-          res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf)]);
+          res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
       const mine = res.find(([, v]) => v.tf === cfg.tf && v.useRegime === base.useRegime);
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
-      const best = res.filter(r => r[2].n >= 20).sort((a, b) => b[2].exp - a[2].exp)[0];
-      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}${best && s === best[2] ? ' <span class="up">best</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td></tr>`).join('');
+      const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 > 0 && s.e2 > 0;
+      const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
+      const part = (x, n) => x === null ? '–' : `<span class="${x >= 0 ? 'up' : 'down'}">${x >= 0 ? '+' : ''}${x.toFixed(2)}R</span> <span class="muted">(${n})</span>`;
+      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}${best && s === best[2] ? ' <span class="up">steady</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td><td class="num">${part(s.e1, s.n1)}</td><td class="num">${part(s.e2, s.n2)}</td></tr>`).join('');
       $('#histTable').hidden = false;
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
-      say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}, ${costPips(inst)} ${unitWord(inst.def)} costs per trade. Results are after costs. ${best ? `Best with at least 20 signals: ${best[0]}.` : 'No version produced 20 signals, too few to judge.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
+      say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}, ${costPips(inst)} ${unitWord(inst.def)} costs per trade. Results are after costs. ${best ? `Steady means at least 30 signals and a positive average in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady yet (30+ signals and positive in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
     histBusy = false; $('#histRun').disabled = false;
   };
