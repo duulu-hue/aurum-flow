@@ -273,9 +273,15 @@ tr.open td{background:var(--gold-soft)}
         <button class="btn" id="rerun" type="button">Re-run history</button>
       </div>
       <div class="thrrow">
+        <label for="tfSel">Entry timeframe</label>
+        <select id="tfSel"><option value="1">1 minute</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="15">15 minutes</option></select>
+        <span class="muted" id="tfMsg" style="font-size:12px">Higher timeframe follows: 1m→15m, 3m→1H, 5m→1H, 15m→4H</span>
+      </div>
+      <div class="thrrow">
         <label for="trigMode">Entry trigger</label>
         <select id="trigMode"><option value="flow" selected>Order flow (rejection candle where no flow)</option><option value="fractal">Fractal sweep</option></select>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useHTF" checked style="accent-color:var(--gold)"> HTF structure</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useRegime" checked style="accent-color:var(--gold)"> Day-type filter</label>
       </div>
     </div>
     <div class="card"><h3>Market read</h3><dl class="read" id="read"></dl></div>
@@ -297,7 +303,7 @@ tr.open td{background:var(--gold-soft)}
     <div class="tablewrap"><table><thead><tr><th>#</th><th>Market</th><th>Time</th><th>Side</th><th>Setup</th><th class="num">Score</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Pips / pts</th><th>Outcome</th></tr></thead><tbody id="tbody"></tbody></table></div>
   </div>
   <div class="pane" id="pane-hist" hidden>
-    <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. Four versions run side by side so you can see which works. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
+    <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, rebuilt into 1, 3, 5 and 15-minute entries, each with the day-type filter on and off, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th></tr></thead><tbody id="histBody"></tbody></table></div>
@@ -330,6 +336,10 @@ tr.open td{background:var(--gold-soft)}
       <section>
         <h4>Structure and room <span class="w">15 + 10</span></h4>
         <p>15 when the higher-timeframe fractal structure (last break of a swing) agrees, 7 when it is undecided. Room scores 10 at 1.5R or more to TP1, 6 at 1.0R.</p>
+      </section>
+      <section>
+        <h4>Day type <span class="w">15</span></h4>
+        <p>The engine first asks what kind of day it is. If at least 75% of the last 20 bars closed above a rising VWAP, it is a trend day up: sells against it are blocked, and buys on pullbacks to VWAP, the POC or the value-area low are allowed. A trend day down is the mirror. Anything else is a balanced day, where fading the value-area edges is allowed.</p>
       </section>
       <section>
         <h4>Trade management</h4>
@@ -368,7 +378,7 @@ const AF = (() => {
       swings: [], ltf: { trend: 'none', lastH: null, lastL: null }, ltfEvents: [],
       htfBars: [], htfCur: null, htfSwings: [], htf: { trend: 'none', lastH: null, lastL: null }, htfEvents: [],
       trades: [], active: null, cooldownUntil: 0, lastEval: null,
-      params: { threshold: 65, lookback: 120, minRR: 1.0, trigger: 'fractal', useHTF: true }
+      params: { threshold: 65, lookback: 120, minRR: 1.0, trigger: 'fractal', useHTF: true, useRegime: true }
     };
   }
 
@@ -506,6 +516,18 @@ const AF = (() => {
     return { i0, i1, lo, arr, total, max: arr[poc], pocJ: poc, vaJ: [a, b], poc: P(poc), val: P(a), vah: P(b), low: P(0), high: P(arr.length - 1), hvn, lvn };
   }
 
+  // day type: is price rotating around VWAP (balance) or holding one side of a sloping VWAP (trend)?
+  function regime(S, k) {
+    const n = 20;
+    if (k < n || S.sessStart[k] !== S.sessStart[k - n] || k - S.sessStart[k] < n) return { kind: 'balance', fr: 0.5, slope: 0 };
+    const atr = Math.max(S.atr[k] || 0, S.BIN);
+    let above = 0; for (let j = k - n + 1; j <= k; j++) if (S.bars[j].c > S.vwap[j]) above++;
+    const fr = above / n, slope = (S.vwap[k] - S.vwap[k - n]) / atr;
+    if (fr >= 0.75 && slope >= 0.3) return { kind: 'up', fr, slope };
+    if (fr <= 0.25 && slope <= -0.3) return { kind: 'down', fr, slope };
+    return { kind: 'balance', fr, slope };
+  }
+
   function htfAtr(S) {
     const B = S.htfBars, n = Math.min(14, B.length);
     if (n < 3) return 0;
@@ -529,15 +551,15 @@ const AF = (() => {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN);
     const prof = profile(S, k - S.params.lookback + 1, k);
     const vw = S.vwap[k], sd = S.vsd[k];
-    const ctx = { S, k, b, atr, prof, vw, sd, sdOk: sd > 0.25 * atr && k - S.sessStart[k] >= 20 };
+    const ctx = { S, k, b, atr, prof, vw, sd, sdOk: sd > 0.25 * atr && k - S.sessStart[k] >= 20, rg: regime(S, k) };
     const long = sideEval(ctx, 1), short = sideEval(ctx, -1);
     let pick = null;
     for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
-    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: ctx.sdOk, long, short, pick };
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: ctx.sdOk, rg: ctx.rg, long, short, pick };
   }
 
   function sideEval(ctx, d) {
-    const { S, k, b, atr, prof, vw, sd, sdOk } = ctx;
+    const { S, k, b, atr, prof, vw, sd, sdOk, rg } = ctx;
     const f = x => x.toFixed(S.dec);
     const ext = d > 0 ? b.l : b.h;
     const up = d > 0, htfWord = S.htfLabel, ltfWord = S.tfLabel;
@@ -552,11 +574,11 @@ const AF = (() => {
       loc.pts = 25; loc.detail = `Price stretched to VWAP ${up ? '−' : '+'}2σ at ${f(vw - d * 2 * sd)}.`;
     } else if (sdOk && d * ((vw - d * sd) - ext) >= 0) {
       loc.pts = 18; loc.detail = `Price reached VWAP ${up ? '−' : '+'}1σ at ${f(vw - d * sd)}.`;
-    } else if (S.htf.trend === (up ? 'up' : 'down')) {
+    } else if (S.htf.trend === (up ? 'up' : 'down') || (S.params.useRegime !== false && rg.kind === (up ? 'up' : 'down'))) {
       for (const [p, n] of [[prof.poc, 'POC'], [vw, 'VWAP']]) {
         if (Math.abs(ext - p) <= 0.4 * atr && d * (b.c - p) > 0) {
           loc.pts = 14; cont = true;
-          loc.detail = `Pullback held the ${n} at ${f(p)} inside a ${htfWord} ${up ? 'uptrend' : 'downtrend'}.`; break;
+          loc.detail = `Pullback held the ${n} at ${f(p)} inside a ${S.htf.trend === (up ? 'up' : 'down') ? htfWord : 'trend-day'} ${up ? 'uptrend' : 'downtrend'}.`; break;
         }
       }
     }
@@ -674,29 +696,37 @@ const AF = (() => {
     else if (tr === 'none') { htf.pts = 7; htf.detail = `${htfWord} structure has not broken a swing yet.`; }
     else htf.detail = `Against the ${htfWord} ${tr}trend. Fade setups only.`;
 
-    // 6. Room to target
+    // 6. Day type (auction regime)
+    const reg = { key: 'regime', label: 'Day type', max: 15, pts: 0, detail: '' };
+    if (S.params.useRegime === false) { reg.na = true; reg.detail = 'Switched off.'; }
+    else if (rg.kind === 'balance') { reg.pts = 8; reg.detail = `Balanced day: price rotates around VWAP ${f(vw)}, so fading the edges is allowed.`; }
+    else if (rg.kind === (up ? 'up' : 'down')) { reg.pts = 15; reg.detail = `Trend day ${rg.kind}: ${Math.round((up ? rg.fr : 1 - rg.fr) * 100)}% of the last 20 bars closed ${up ? 'above' : 'below'} a ${up ? 'rising' : 'falling'} VWAP. Trading with it.`; }
+    else { reg.block = true; reg.detail = `Trend day ${rg.kind}: ${Math.round((rg.kind === 'up' ? rg.fr : 1 - rg.fr) * 100)}% of the last 20 bars closed ${rg.kind === 'up' ? 'above a rising' : 'below a falling'} VWAP. ${up ? 'Buying' : 'Selling'} against it is blocked.`; }
+
+    // 7. Room to target
     const room = { key: 'room', label: 'Room to target', max: 10, pts: 0, detail: '' };
     if (risk > maxRisk + 1e-9) room.detail = `Stop would be ${Math.round(risk / S.pip)} pips. Too wide for this setup.`;
     else if (rr1 >= 1.5) { room.pts = 10; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R.`; }
     else if (rr1 >= 1.0) { room.pts = 6; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R. Tight.`; }
     else room.detail = `Only ${rr1.toFixed(1)}R to TP1 ${t1[1]}. Not enough room.`;
 
-    const factors = [loc, trig, book, flow, htf, room];
+    const factors = [loc, trig, book, flow, htf, reg, room];
     let pts = 0, max = 0;
     for (const x of factors) if (!x.na) { pts += x.pts; max += x.max; }
     const score = Math.round(100 * pts / max);
-    const fire = loc.pts > 0 && trig.pts > 0 && rr1 >= S.params.minRR && risk <= maxRisk + 1e-9 && score >= S.params.threshold;
+    const fire = !reg.block && loc.pts > 0 && trig.pts > 0 && rr1 >= S.params.minRR && risk <= maxRisk + 1e-9 && score >= S.params.threshold;
     return {
       dir: d, factors, score, fire, entry, sl, risk, tp1: t1[0], tp1Name: t1[1], tp2: t2[0], tp2Name: t2[1], rr1, rr2,
       setup: cont ? 'Trend pullback' : (loc.pts && trig.pts ? 'Value-edge reversal' : 'Value-edge reversal'),
-      hasTrigger: trig.pts > 0, hasLocation: loc.pts > 0
+      hasTrigger: trig.pts > 0, hasLocation: loc.pts > 0, blocked: !!reg.block
     };
   }
 
   // ---------------------------------------------------------------- trades
   function narrate(S, c) {
     const f = x => x.toFixed(S.dec), pips = x => Math.round(x / S.pip);
-    const parts = c.factors.filter(x => x.pts > 0 && x.key !== 'room' && x.key !== 'htf').map(x => x.detail);
+    const parts = c.factors.filter(x => x.pts > 0 && x.key !== 'room' && x.key !== 'htf' && x.key !== 'regime').map(x => x.detail);
+    const rgF = c.factors.find(x => x.key === 'regime'); if (rgF && !rgF.na) parts.push(rgF.detail);
     const htf = c.factors.find(x => x.key === 'htf');
     return `${c.dir > 0 ? 'Long' : 'Short'}, ${c.setup.toLowerCase()}. ${parts.join(' ')}${htf.na ? '' : ' ' + htf.detail} ` +
       `Stop ${f(c.sl)} (${pips(c.risk)} pips). TP1 ${c.tp1Name} ${f(c.tp1)} at ${c.rr1.toFixed(1)}R, TP2 ${c.tp2Name} ${f(c.tp2)} at ${c.rr2.toFixed(1)}R. ` +
@@ -735,7 +765,7 @@ const AF = (() => {
       if (stopHit) return finish(S, t, k, t.realized, 'TP1, rest at breakeven', t.entry);
       if (hit(t.tp2)) return finish(S, t, k, t.realized + 0.5 * R(t.tp2), 'TP2 hit', t.tp2);
     }
-    if (k - t.k >= 240) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
+    if (k - t.k >= Math.max(20, Math.round(4 * 3600e3 / S.interval))) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
   }
 
   function liveR(S, price) {
@@ -1335,7 +1365,8 @@ const AF = (() => {
     else where = Math.abs(price - p.poc) < (p.vah - p.val) * 0.2 ? `pinned near the POC ${fmt(p.poc)}, the middle of value` : `inside value, between VAL ${fmt(p.val)} and VAH ${fmt(p.vah)}`;
     const best = e.long.score >= e.short.score ? e.long : e.short;
     let why;
-    if (!best.hasLocation) why = 'No edge at this price.';
+    if (best.blocked) why = `It is a trend day ${e.rg.kind}, so the engine will not ${e.rg.kind === 'up' ? 'sell' : 'buy'} against it. It waits for a pullback to ${e.rg.kind === 'up' ? 'buy' : 'sell'} at VWAP, the POC or the value edge.`;
+    else if (!best.hasLocation) why = 'No edge at this price.';
     else if (!best.hasTrigger) why = `The ${best.dir > 0 ? 'long' : 'short'} case has location but no trigger yet.`;
     else if (best.score < S.params.threshold) why = `The ${best.dir > 0 ? 'long' : 'short'} case scores ${best.score}, below your ${S.params.threshold} threshold.`;
     else if (best.rr1 < S.params.minRR) why = `Not enough room to TP1 (${best.rr1.toFixed(1)}R).`;
@@ -1377,6 +1408,7 @@ const AF = (() => {
       [`${S.htfLabel} structure`, `${st(S.htf)}${S.htf.lastH ? ` · H ${fmt(S.htf.lastH.price)}` : ''}${S.htf.lastL ? ` · L ${fmt(S.htf.lastL.price)}` : ''}`],
       [`${S.tfLabel} structure`, st(S.ltf)],
       ['Value area', `${fmt(p.val)} · <span style="color:${C.gold}">${fmt(p.poc)}</span> · ${fmt(p.vah)}`],
+      ['Day type', e.rg ? (e.rg.kind === 'up' ? '<span class="up">Trend up</span>' : e.rg.kind === 'down' ? '<span class="down">Trend down</span>' : '<span class="muted">Balanced</span>') : '–'],
       ['VWAP', `${fmt(e.vw)}${sig !== null ? ` · ${sig >= 0 ? '+' : ''}${sig.toFixed(1)}σ` : ''}`],
       ['ATR (14)', `${fmt(e.atr)} · ${Math.round(e.atr / S.pip)} pips`],
       [`Delta, last 10 bars${S.hasFlow ? '' : ' (est.)'}`, `<span class="${d10 >= 0 ? 'up' : 'down'}">${d10 >= 0 ? '+' : ''}${Math.round(d10)}</span>`]
@@ -1465,6 +1497,9 @@ const AF = (() => {
   for (const m of allDefs()) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on !== false;
   Object.defineProperty(cfg, 'offset', { get: () => cfg.offsets[cur.def.id] || 0, enumerable: false });
   const saveCfg = () => LS.set('cfg', cfg);
+  if (![1, 3, 5, 15].includes(cfg.tf)) cfg.tf = 5;
+  const HTF_MULT = { 1: 15, 3: 20, 5: 12, 15: 16 };
+  const TFMS = () => cfg.tf * 60000;
   const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(cur && cur.def.dec ? Math.min(cur.def.dec, 5) : 2)}`;
   const costPips = inst => cfg.costs[inst.def.id] ?? inst.def.cost;
   const unitWord = def => def.rng ? 'points' : 'pips';
@@ -1481,7 +1516,7 @@ const AF = (() => {
 
   function storeFor(inst) {
     const d = inst.def;
-    return AF.createStore({ mode: d.src === 'binance' ? 'live' : 'tick', hasBook: d.src === 'binance', hasFlow: d.src === 'binance', symbol: d.label, bin: d.bin, pip: d.pip, dec: d.dec, interval: 60000, htfMult: 15 });
+    return AF.createStore({ mode: d.src === 'binance' ? 'live' : 'tick', hasBook: d.src === 'binance', hasFlow: d.src === 'binance', symbol: d.label, bin: d.bin, pip: d.pip, dec: d.dec, interval: TFMS(), htfMult: HTF_MULT[cfg.tf] });
   }
 
   // ---------------- live signal journal (this device, all markets)
@@ -1500,7 +1535,7 @@ const AF = (() => {
     const t = {
       id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
       entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2, tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2,
-      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + 60000,
+      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + TFMS(), tf: cfg.tf, maxMs: Math.max(20 * TFMS(), 4 * 3600e3),
       offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker
     };
     ledger.push(t); saveLedger(); notify('open', t); journalDirty = panelDirty = true;
@@ -1519,7 +1554,7 @@ const AF = (() => {
       if (stopHit) return closeSig(t, t.realized, 'TP1, rest at breakeven', time);
       if (hit(t.tp2)) return closeSig(t, t.realized + 0.5 * R(t.tp2), 'TP2 hit', time);
     }
-    if (time - t.t >= 240 * 60000) closeSig(t, t.stage ? t.realized + 0.5 * R(close) : R(close), 'Timed out', time);
+    if (time - t.t >= (t.maxMs || 240 * 60000)) closeSig(t, t.stage ? t.realized + 0.5 * R(close) : R(close), 'Timed out', time);
   }
   function closeSig(t, gross, status, time) {
     t.gross = gross; t.result = gross - costR(t); t.status = status; t.exitT = time; t.pips = t.result * t.risk / t.pip;
@@ -1556,11 +1591,11 @@ const AF = (() => {
     const S_ = inst.S, bar = finishBar(inst, S_.cur), before = S_.trades.length;
     AF.closeBar(S_, bar);
     if (S_.trades.length > before) { const tr = S_.trades[S_.trades.length - 1]; if (tr.k >= S_.liveFrom && !openSignalFor(inst.def.id)) addSignal(inst, tr); }
-    const o = openSignalFor(inst.def.id); if (o) { o.lastSeen = bar.t + 60000; saveLedger(); }
-    newBar(inst, bar.t + 60000, bar.c);
+    const o = openSignalFor(inst.def.id); if (o) { o.lastSeen = bar.t + S_.interval; saveLedger(); }
+    newBar(inst, bar.t + S_.interval, bar.c);
     if (inst === cur) panelDirty = journalDirty = dirty = true; else journalDirty = true;
   }
-  function rollTo(inst, t) { let n = 0; while (inst.S.cur && t >= inst.S.cur.t + 60000 && n++ < 600) closeCurrent(inst); }
+  function rollTo(inst, t) { let n = 0; while (inst.S.cur && t >= inst.S.cur.t + inst.S.interval && n++ < 600) closeCurrent(inst); }
   function ingest(inst, p, q, sellerAgg, t) {
     rollTo(inst, t);
     const b = inst.S.cur; if (!b || t < b.t) return;
@@ -1587,14 +1622,15 @@ const AF = (() => {
     if (!d.bin) d.bin = Math.max(d.pip || 0, nice((med(bars.slice(-600).map(b => b.h - b.l)) || (d.pip || 0.0001) * 10) / 6));
     const S_ = storeFor(inst); readParams(S_.params, inst);
     let forming = null;
-    for (const b of bars) { if (b.t + 60000 > nowMs) { forming = b; continue; } AF.closeBar(S_, b); }
+    const iv = S_.interval;
+    for (const b of bars) { if (b.t + iv > nowMs) { forming = b; continue; } AF.closeBar(S_, b); }
     S_.liveFrom = S_.bars.length;
     clearHistoryActive(S_);
     inst.S = S_;
     if (forming) { newBar(inst, forming.t, forming.o); Object.assign(S_.cur, { h: forming.h, l: forming.l, c: forming.c }); }
-    else newBar(inst, Math.floor(nowMs / 60000) * 60000, S_.bars.length ? S_.bars[S_.bars.length - 1].c : 0);
+    else newBar(inst, Math.floor(nowMs / iv) * iv, S_.bars.length ? S_.bars[S_.bars.length - 1].c : 0);
     const o = openSignalFor(d.id);
-    if (o) { for (const b of S_.bars) if (b.t + 60000 > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + 60000); if (o.result === null) { o.lastSeen = nowMs; saveLedger(); } }
+    if (o) { for (const b of S_.bars) if (b.t + iv > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + iv); if (o.result === null) { o.lastSeen = nowMs; saveLedger(); } }
     inst.lastPx = S_.cur.c;
   }
   function clearHistoryActive(N) {
@@ -1682,9 +1718,9 @@ const AF = (() => {
     ws.onclose = () => { if (inst.tradeWs === ws) { inst.tradeOk = false; setTimeout(() => binConnectTrades(inst), 3000); } };
     ws.onerror = () => { try { ws.close(); } catch { } };
   }
-  async function binFetchKlines(sym, startMs, endMs, limit) {
+  async function binFetchKlines(sym, startMs, endMs, limit, tfMin) {
     const q = startMs ? `&startTime=${Math.floor(startMs)}` : '';
-    const r = await fetch(`${REST}/fapi/v1/klines?symbol=${sym}&interval=1m&limit=${limit || 1000}${q}`);
+    const r = await fetch(`${REST}/fapi/v1/klines?symbol=${sym}&interval=${tfMin || cfg.tf}m&limit=${limit || 1000}${q}`);
     if (!r.ok) throw new Error('Binance answered HTTP ' + r.status);
     return (await r.json()).map(k => k.map(Number)).filter(v => !endMs || v[0] < endMs).map(v => kBar(v[0], v[1], v[2], v[3], v[4], v[5], v[9]));
   }
@@ -1741,8 +1777,8 @@ const AF = (() => {
       setTimeout(() => { if (deriv.pending.has(id)) { deriv.pending.delete(id); rej(new Error('Deriv did not answer in time')); } }, 30000);
     });
   }
-  async function derivCandles(sym, startS, endS) {
-    const req = { ticks_history: sym, style: 'candles', granularity: 60, end: endS ? String(endS) : 'latest', adjust_start_time: 1, count: 5000 };
+  async function derivCandles(sym, startS, endS, tfMin) {
+    const req = { ticks_history: sym, style: 'candles', granularity: 60 * (tfMin || cfg.tf), end: endS ? String(endS) : 'latest', adjust_start_time: 1, count: 5000 };
     if (startS) req.start = startS; else req.count = 1000;
     const d = await derivSend(req);
     return { pipSize: d.pip_size, bars: (d.candles || []).map(c => kBar(+c.epoch * 1000, +c.open, +c.high, +c.low, +c.close, 1, 0.5)) };
@@ -1773,7 +1809,7 @@ const AF = (() => {
     for (const inst of insts) {
       if (!inst.warm || !cfg.enabled[inst.def.id] || !inst.S || !inst.S.cur) continue;
       const now = Date.now() + inst.clockOff;
-      if (now >= inst.S.cur.t + 61500) rollTo(inst, now);
+      if (now >= inst.S.cur.t + inst.S.interval + 1500) rollTo(inst, now);
       if (inst.def.src === 'binance') { const bk = bookSnap(inst); if (bk) { inst.S.liveBook = bk; if (inst === cur && layers.heat) dirty = true; } }
     }
   }, 250);
@@ -2047,7 +2083,7 @@ const AF = (() => {
     if (inst.def.src === 'binance') {
       let t = start;
       while (t < end - 60000) {
-        const rows = await binFetchKlines(inst.def.sym, t, end, 1500); if (!rows.length) break;
+        const rows = await binFetchKlines(inst.def.sym, t, end, 1500, 1); if (!rows.length) break;
         out.push(...rows); const next = rows[rows.length - 1].t + 60000; if (next <= t) break; t = next;
         say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((t - start) / (end - start) * 100))}%`);
         await new Promise(r => setTimeout(r, 120));
@@ -2056,7 +2092,7 @@ const AF = (() => {
       let s = Math.floor(start / 1000); const e = Math.floor(end / 1000);
       while (s < e - 60) {
         const to = Math.min(e, s + 3 * 86400);
-        const { bars } = await derivCandles(inst.def.sym, s, to);
+        const { bars } = await derivCandles(inst.def.sym, s, to, 1);
         for (const b of bars) if (!out.length || b.t > out[out.length - 1].t) out.push(b);
         s = to;
         say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((s * 1000 - start) / (end - start) * 100))}%`);
@@ -2071,8 +2107,19 @@ const AF = (() => {
     const n = cl.length;
     return { n, perDay: n / days, wr: n ? wins / n : 0, exp: n ? netR / n : 0, netR, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), dd, L, Sh };
   }
-  async function runVariant(inst, bars, params, say, label, days) {
-    const T = storeFor(inst); T.BIN = inst.S ? inst.S.BIN : T.BIN; T.pip = inst.S ? inst.S.pip : T.pip; T.dec = inst.S ? inst.S.dec : T.dec;
+  function aggregate(bars, tfMin) {
+    if (tfMin === 1) return bars;
+    const ms = tfMin * 60000, out = []; let cur = null;
+    for (const b of bars) {
+      const k = Math.floor(b.t / ms) * ms;
+      if (!cur || cur.t !== k) { cur = { t: k, o: b.o, h: b.h, l: b.l, c: b.c, v: 0, bv: 0, sv: 0, pv: 0, p2v: 0, fp: null, book: null }; out.push(cur); }
+      if (b.h > cur.h) cur.h = b.h; if (b.l < cur.l) cur.l = b.l; cur.c = b.c;
+      cur.v += b.v; cur.bv += b.bv; cur.sv += b.sv; cur.pv += b.pv; cur.p2v += b.p2v;
+    }
+    return out;
+  }
+  async function runVariant(inst, bars, params, say, label, days, tfMin) {
+    const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tfMin * 60000, htfMult: HTF_MULT[tfMin] });
     Object.assign(T.params, params);
     for (let i = 0; i < bars.length; i++) {
       AF.closeBar(T, bars[i]);
@@ -2085,36 +2132,38 @@ const AF = (() => {
     if (histBusy || !live || !cur.S) return; histBusy = true; $('#histRun').disabled = true;
     const inst = cur, say = m => { $('#histMsg').textContent = m; }, days = +$('#histDays').value;
     try {
-      const bars = await historyBars(inst, days, say);
-      if (bars.length < 500) throw new Error('not enough history came back');
+      const m1 = await historyBars(inst, days, say);
+      if (m1.length < 500) throw new Error('not enough history came back');
       const base = { ...inst.S.params }; readParams(base, inst);
-      const fw = inst.def.src === 'binance' ? 'Order flow' : 'Rejection candle';
-      const variants = [
-        [`${fw} + 15m filter`, { trigger: 'flow', useHTF: true }],
-        [`${fw}, no 15m filter`, { trigger: 'flow', useHTF: false }],
-        ['Fractal sweep + 15m filter', { trigger: 'fractal', useHTF: true }],
-        ['Fractal sweep, no 15m filter', { trigger: 'fractal', useHTF: false }]
-      ];
       const res = [];
-      for (const [name, v] of variants) res.push([name, v, await runVariant(inst, bars, { ...base, ...v }, say, name, days)]);
-      const mine = res.find(([, v]) => v.trigger === base.trigger && v.useHTF === base.useHTF);
+      for (const tf of [1, 3, 5, 15]) {
+        const bars = aggregate(m1, tf);
+        for (const onOff of [true, false]) {
+          const name = `${tf}m entries · day-type filter ${onOff ? 'on' : 'off'}`;
+          res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf)]);
+        }
+      }
+      const mine = res.find(([, v]) => v.tf === cfg.tf && v.useRegime === base.useRegime);
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
-      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td></tr>`).join('');
+      const best = res.filter(r => r[2].n >= 20).sort((a, b) => b[2].exp - a[2].exp)[0];
+      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}${best && s === best[2] ? ' <span class="up">best</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td></tr>`).join('');
       $('#histTable').hidden = false;
-      const d1 = new Date(bars[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(bars[bars.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
-      say(`${inst.def.label}: tested ${bars.length.toLocaleString()} one-minute bars, ${d1} to ${d2}, threshold ${base.threshold}, ${costPips(inst)} ${unitWord(inst.def)} costs per trade. Results are after costs. ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'This market has no volume or order book, so only structure, value and price action are scored.'}`);
+      const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
+      say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}, ${costPips(inst)} ${unitWord(inst.def)} costs per trade. Results are after costs. ${best ? `Best with at least 20 signals: ${best[0]}.` : 'No version produced 20 signals, too few to judge.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
     histBusy = false; $('#histRun').disabled = false;
   };
 
   // ---------------- engine controls (apply to every market)
-  const readParams = (P, inst) => { inst = inst || cur; P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01)); };
+  const readParams = (P, inst) => { inst = inst || cur; P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.useRegime = $('#useRegime').checked; P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01)); };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
   function rebuildAll() { for (const i of insts) if (i.S) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); } if (cur.S) S = cur.S; afterRebuild(); }
   $('#thr').oninput = e => { $('#thrv').textContent = e.target.value; for (const i of insts) if (i.S) i.S.params.threshold = +e.target.value; if (S) S.lastEval = reEval(); panelDirty = true; };
   $('#lookback').onchange = e => { for (const i of insts) if (i.S) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
   $('#rerun').onclick = () => rebuildAll();
-  $('#trigMode').onchange = $('#useHTF').onchange = () => rebuildAll();
+  $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => rebuildAll();
+  $('#tfSel').value = String(cfg.tf);
+  $('#tfSel').onchange = e => { cfg.tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = 'Reloading every market on the new timeframe…'; setTimeout(() => location.reload(), 300); };
   const reEval = () => S && S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
