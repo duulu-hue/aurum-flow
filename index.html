@@ -139,6 +139,21 @@ tr.open td{background:var(--gold-soft)}
 .steps{margin:0;padding-left:18px;font-size:12.5px;color:#c3cbda;display:flex;flex-direction:column;gap:4px}
 .mt5{font-size:12.5px;color:var(--muted);margin:0 0 10px;font-family:var(--f-mono)}
 .mt5 b{color:var(--fg);font-weight:500}
+.addchip{color:var(--gold);border-style:dashed}
+.addmk{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+.addhead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.addhead h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mkres{max-height:380px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+.rgroup h4{margin:0 0 6px;font-family:var(--f-display);font-weight:600;font-size:13px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.rngtag{font-size:10.5px;color:var(--down);border:1px solid rgba(238,106,90,.4);border-radius:4px;padding:0 5px;margin-left:6px;letter-spacing:.04em}
+.rrow{display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr) auto;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:13px}
+.rrow .rl{font-family:var(--f-display);font-weight:600}
+.rrow .rn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .btn{padding:4px 12px;font-size:12px}
+.rrow .btn.primary{min-width:0}
+.mrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.linkbtn{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline}
+.linkbtn:hover{color:var(--down)}
 .mstrip{display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-block:12px 2px;scrollbar-width:thin}
 .wchip{display:flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;cursor:pointer}
 .wchip.sel{border-color:var(--gold);background:var(--gold-soft)}
@@ -180,6 +195,12 @@ tr.open td{background:var(--gold-soft)}
   </div>
 </header>
 <nav class="mstrip" id="watch" aria-label="Markets"></nav>
+<section class="card addmk" id="addPanel" hidden>
+  <div class="addhead"><h3>Add a market</h3><button type="button" class="btn" id="mkClose">Close</button></div>
+  <div class="frow"><label for="mkSearch">Search</label><input id="mkSearch" placeholder="EURUSD, gold, US 100, Volatility 75…" autocomplete="off"></div>
+  <p class="hintp" id="mkMsg">Loading the list of markets…</p>
+  <div id="mkResults" class="mkres"></div>
+</section>
 <p class="err" id="err" hidden></p>
 <p class="feednote" id="feedNote" hidden></p>
 
@@ -1424,26 +1445,24 @@ const AF = (() => {
   const med = a => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1] || 0; };
 
   // ---------------- markets
-  const MARKETS = [
-    { id: 'BIN:XAUUSDT', src: 'binance', sym: 'XAUUSDT', label: 'XAUUSD', name: 'Gold', group: 'Metals · Binance order book', bin: 0.5, pip: 0.1, dec: 2, cost: 3, on: true },
-    { id: 'BIN:XAGUSDT', src: 'binance', sym: 'XAGUSDT', label: 'XAGUSD', name: 'Silver', group: 'Metals · Binance order book', pip: 0.01, dec: 3, cost: 3, on: true },
-    { id: 'DER:frxEURUSD', src: 'deriv', sym: 'frxEURUSD', label: 'EURUSD', name: 'Euro / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1, on: true },
-    { id: 'DER:frxGBPUSD', src: 'deriv', sym: 'frxGBPUSD', label: 'GBPUSD', name: 'Pound / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.2, on: true },
-    { id: 'DER:frxUSDJPY', src: 'deriv', sym: 'frxUSDJPY', label: 'USDJPY', name: 'US dollar / Yen', group: 'Forex · Deriv prices', pip: 0.01, dec: 3, cost: 1.2, on: true },
-    { id: 'DER:frxAUDUSD', src: 'deriv', sym: 'frxAUDUSD', label: 'AUDUSD', name: 'Aussie / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.2, on: false },
-    { id: 'DER:frxUSDCAD', src: 'deriv', sym: 'frxUSDCAD', label: 'USDCAD', name: 'US dollar / Loonie', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.5, on: false },
-    { id: 'DER:R_75', src: 'deriv', sym: 'R_75', label: 'V75', name: 'Volatility 75 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: true },
-    { id: 'DER:R_100', src: 'deriv', sym: 'R_100', label: 'V100', name: 'Volatility 100 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
-    { id: 'DER:BOOM1000', src: 'deriv', sym: 'BOOM1000', label: 'Boom 1000', name: 'Boom 1000 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
-    { id: 'DER:CRASH1000', src: 'deriv', sym: 'CRASH1000', label: 'Crash 1000', name: 'Crash 1000 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
-    { id: 'DER:stpRNG', src: 'deriv', sym: 'stpRNG', label: 'Step', name: 'Step Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false }
+  const BINANCE_MARKETS = [
+    { id: 'BIN:XAUUSDT', src: 'binance', sym: 'XAUUSDT', label: 'XAUUSD', name: 'Gold, Binance order book', group: 'Order book · Binance (testing)', bin: 0.5, pip: 0.1, dec: 2, cost: 3, on: true },
+    { id: 'BIN:XAGUSDT', src: 'binance', sym: 'XAGUSDT', label: 'XAGUSD', name: 'Silver, Binance order book', group: 'Order book · Binance (testing)', pip: 0.01, dec: 3, cost: 3, on: true }
+  ];
+  const DEFAULT_DERIV = [
+    { id: 'DER:frxEURUSD', src: 'deriv', sym: 'frxEURUSD', label: 'EURUSD', name: 'EUR/USD', group: 'Forex', pip: 0.0001, dec: 5, cost: 1 },
+    { id: 'DER:frxGBPUSD', src: 'deriv', sym: 'frxGBPUSD', label: 'GBPUSD', name: 'GBP/USD', group: 'Forex', pip: 0.0001, dec: 5, cost: 1.2 },
+    { id: 'DER:frxUSDJPY', src: 'deriv', sym: 'frxUSDJPY', label: 'USDJPY', name: 'USD/JPY', group: 'Forex', pip: 0.01, dec: 3, cost: 1.2 },
+    { id: 'DER:R_75', src: 'deriv', sym: 'R_75', label: 'V75', name: 'Volatility 75 Index', group: 'Synthetics', rng: true, cost: 0 }
   ];
 
   // ---------------- settings (this device only)
   const cfg = Object.assign({ broker: 'Exness', offsets: {}, costs: {}, enabled: {}, sel: 'BIN:XAUUSDT', tgToken: '', tgChat: '', tgOn: false }, LS.get('cfg', {}));
   if (typeof cfg.offset === 'number') { cfg.offsets['BIN:XAUUSDT'] = cfg.offset; } delete cfg.offset;
   if (typeof cfg.cost === 'number') { cfg.costs['BIN:XAUUSDT'] = cfg.cost; } delete cfg.cost;
-  for (const m of MARKETS) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on;
+  if (!Array.isArray(cfg.added)) cfg.added = DEFAULT_DERIV.map(d => ({ ...d }));
+  const allDefs = () => BINANCE_MARKETS.concat(cfg.added);
+  for (const m of allDefs()) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on !== false;
   Object.defineProperty(cfg, 'offset', { get: () => cfg.offsets[cur.def.id] || 0, enumerable: false });
   const saveCfg = () => LS.set('cfg', cfg);
   const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(cur && cur.def.dec ? Math.min(cur.def.dec, 5) : 2)}`;
@@ -1451,10 +1470,11 @@ const AF = (() => {
   const unitWord = def => def.rng ? 'points' : 'pips';
 
   // ---------------- instruments
-  const insts = MARKETS.map(def => ({
+  const makeInst = def => ({
     def, S: null, warm: false, starting: false, note: '', lastTick: 0, clockOff: 0, pend: [], lastPx: null,
     bids: new Map(), asks: new Map(), synced: false, snapId: null, lastU: null, buf: [], mode: 'diff', depthWs: null, tradeWs: null, depthOk: false, tradeOk: false, snapBusy: false
-  }));
+  });
+  const insts = allDefs().map(makeInst);
   const byId = Object.fromEntries(insts.map(i => [i.def.id, i]));
   let cur = byId[cfg.sel] || insts[0];
   let live = true;
@@ -1737,7 +1757,7 @@ const AF = (() => {
     if (!d.pip) { d.pip = 0.01; d.dec = 2; }
     if (!d.dec) d.dec = 2;
     if (d.rng) inst.note = 'Synthetic indices are produced by Deriv\'s random number generator. No real buyers, sellers or order book stand behind them, so order flow does not exist here and VWAP and the profile are time-based. Check the History test before trusting any signal.';
-    else inst.note = 'Forex has no central order book and Deriv publishes no volume, so this market uses price structure, time-based VWAP and a TPO profile. No heatmap.';
+    else inst.note = `${d.group === 'Forex' ? 'Forex has no central order book and Deriv' : 'Deriv'} publishes no volume for ${d.label}, so this market uses price structure, time-based VWAP and a TPO profile. No heatmap.`;
     seedStore(inst, bars, Date.now() + inst.clockOff);
     inst.warm = true; inst.starting = false;
     derivSend({ ticks: d.sym, subscribe: 1 }).catch(e => { inst.note = `Live prices for ${d.label} are unavailable: ${e.message}`; });
@@ -1785,9 +1805,11 @@ const AF = (() => {
       const sig = o ? `<b class="${o.dir > 0 ? 'up' : 'down'}">${o.dir > 0 ? 'BUY' : 'SELL'}</b>` : '';
       return `<button type="button" class="wchip${i === cur && live ? ' sel' : ''}" data-mk="${i.def.id}" aria-pressed="${i === cur && live}"><span class="dot ${s.cls}"></span><span class="wl">${esc(i.def.label)}</span><span class="num wp">${px}</span>${sig}</button>`;
     }).join('');
-    if (html === renderWatch.last) return; renderWatch.last = html;
-    $('#watch').innerHTML = html;
-    document.querySelectorAll('.wchip').forEach(b => b.onclick = () => { if (!live) backToLive(); selectMarket(b.dataset.mk); });
+    const full = html + '<button type="button" class="wchip addchip" id="addMk">+ Add market</button>';
+    if (full === renderWatch.last) return; renderWatch.last = full;
+    $('#watch').innerHTML = full;
+    document.querySelectorAll('.wchip[data-mk]').forEach(b => b.onclick = () => { if (!live) backToLive(); selectMarket(b.dataset.mk); });
+    $('#addMk').onclick = openAdd;
   }
 
   function selectMarket(id, quiet) {
@@ -1849,14 +1871,75 @@ const AF = (() => {
     $('#tgMsg').textContent = ok ? 'Test sent. Check Telegram.' : 'Sending failed. Check the token and chat ID.';
   };
   function renderMarketList() {
-    const groups = [...new Set(MARKETS.map(m => m.group))];
-    $('#mkts').innerHTML = groups.map(g => `<fieldset class="mgroup"><legend>${esc(g)}</legend>${MARKETS.filter(m => m.group === g).map(m => `<label class="chk"><input type="checkbox" data-en="${m.id}"${cfg.enabled[m.id] ? ' checked' : ''}> ${esc(m.label)} <span class="muted">${esc(m.name)}</span></label>`).join('')}</fieldset>`).join('');
+    const groups = [...new Set(insts.map(i => i.def.group))];
+    $('#mkts').innerHTML = groups.map(g => `<fieldset class="mgroup"><legend>${esc(g)}</legend>${insts.filter(i => i.def.group === g).map(i => `<div class="mrow"><label class="chk"><input type="checkbox" data-en="${i.def.id}"${cfg.enabled[i.def.id] ? ' checked' : ''}> ${esc(i.def.label)} <span class="muted">${esc(i.def.name)}</span></label>${i.def.src === 'deriv' ? `<button type="button" class="linkbtn" data-rm="${i.def.id}">Remove</button>` : ''}</div>`).join('')}</fieldset>`).join('') + '<button type="button" class="btn" id="addMk2">Add a market</button>';
     document.querySelectorAll('[data-en]').forEach(cb => cb.onchange = () => {
       const inst = byId[cb.dataset.en]; cfg.enabled[inst.def.id] = cb.checked; saveCfg();
       if (cb.checked) startInst(inst); else { stopInst(inst); if (inst === cur) { const nx = insts.find(i => cfg.enabled[i.def.id]); if (nx) selectMarket(nx.def.id); } }
-      renderWatch();
+      renderWatch.last = ''; renderWatch();
     });
+    document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => removeMarket(b.dataset.rm));
+    $('#addMk2').onclick = openAdd;
   }
+  function removeMarket(id) {
+    const inst = byId[id]; if (!inst || inst.def.src !== 'deriv') return;
+    stopInst(inst); inst.removed = true;
+    cfg.added = cfg.added.filter(d => d.id !== id); delete cfg.enabled[id]; saveCfg();
+    insts.splice(insts.indexOf(inst), 1); delete byId[id];
+    if (inst === cur) selectMarket(insts.find(i => cfg.enabled[i.def.id])?.def.id || insts[0].def.id);
+    renderMarketList(); renderWatch.last = ''; renderWatch(); renderCatalog();
+  }
+
+  // ---------------- market search (everything Deriv lists)
+  let catalog = null, catalogBusy = false;
+  const GROUPS = { forex: 'Forex', synthetic_index: 'Synthetics', commodities: 'Commodities', indices: 'Stock indices', cryptocurrency: 'Crypto', stocks: 'Stocks' };
+  const decOf = p => { const s = String(p); if (s.includes('e-')) return +s.split('e-')[1]; const i = s.indexOf('.'); return i < 0 ? 0 : s.length - i - 1; };
+  function toDef(a) {
+    const sym = a.symbol || a.underlying_symbol, market = a.market || '', point = +(a.pip || a.pip_size || 0) || null;
+    const name = a.display_name || a.underlying_symbol_name || sym, group = GROUPS[market] || a.market_display_name || 'Other';
+    const rng = market === 'synthetic_index';
+    let label = market === 'forex' || market === 'cryptocurrency' ? name.replace(/\//g, '') : name.replace(/ Index$/, '');
+    if (insts.some(i => i.def.label === label && i.def.sym !== sym)) label += ' · Deriv';
+    const pip = point ? (market === 'forex' || market === 'commodities' ? point * 10 : point) : null;
+    const dec = point ? decOf(point) : null;
+    const cost = market === 'forex' ? 1.2 : market === 'commodities' ? 3 : rng ? 0 : 2;
+    return { id: 'DER:' + sym, src: 'deriv', sym, label, name, group, rng, pip, dec, cost, open: a.exchange_is_open !== 0, suspended: !!a.is_trading_suspended };
+  }
+  async function loadCatalog() {
+    if (catalog || catalogBusy) return; catalogBusy = true;
+    $('#mkMsg').textContent = 'Loading the list of markets from Deriv…';
+    try {
+      let d;
+      try { d = await derivSend({ active_symbols: 'brief' }); }
+      catch { d = await derivSend({ active_symbols: 'brief', product_type: 'basic' }); }
+      const list = d.active_symbols || [];
+      catalog = list.map(toDef).filter(x => x.sym && !x.suspended).sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
+      $('#mkMsg').textContent = `${catalog.length} markets available. Type to search, then press Add.`;
+    } catch (ex) { $('#mkMsg').textContent = `Could not load the market list (${ex.message}). Close and open this panel to try again.`; }
+    catalogBusy = false; renderCatalog();
+  }
+  function renderCatalog() {
+    if (!catalog || $('#addPanel').hidden) return;
+    const q = $('#mkSearch').value.trim().toLowerCase().replace(/[\s/]+/g, '');
+    const hits = catalog.filter(c => !q || (c.label + c.name + c.sym + c.group).toLowerCase().replace(/[\s/]+/g, '').includes(q)).slice(0, 60);
+    const groups = [...new Set(hits.map(h => h.group))];
+    $('#mkResults').innerHTML = hits.length ? groups.map(g => `<div class="rgroup"><h4>${esc(g)}${g === 'Synthetics' ? ' <span class="rngtag">random by design</span>' : ''}</h4>${hits.filter(h => h.group === g).map(h => {
+      const have = !!byId[h.id];
+      return `<div class="rrow"><span class="rl">${esc(h.label)}</span><span class="muted rn">${esc(h.name)}${h.open ? '' : ' · closed now'}</span><button type="button" class="btn${have ? '' : ' primary'}" data-add="${h.sym}"${have ? ' disabled' : ''}>${have ? 'Scanning' : 'Add'}</button></div>`;
+    }).join('')}</div>`).join('') : '<p class="hintp">No market matches that search.</p>';
+    document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => addMarket(catalog.find(c => c.sym === b.dataset.add)));
+  }
+  function addMarket(def) {
+    if (!def || byId[def.id]) return;
+    const d = { id: def.id, src: 'deriv', sym: def.sym, label: def.label, name: def.name, group: def.group, rng: def.rng, pip: def.pip, dec: def.dec, cost: def.cost };
+    cfg.added.push(d); cfg.enabled[d.id] = true; saveCfg();
+    const inst = makeInst(d); insts.push(inst); byId[d.id] = inst;
+    renderMarketList(); renderCatalog(); renderWatch.last = '';
+    startInst(inst); selectMarket(d.id);
+  }
+  function openAdd() { const p = $('#addPanel'); p.hidden = false; $('#mkSearch').focus(); loadCatalog(); renderCatalog(); p.scrollIntoView({ block: 'nearest' }); }
+  $('#mkSearch').oninput = () => renderCatalog();
+  $('#mkClose').onclick = () => { $('#addPanel').hidden = true; };
 
   // ---------------- journal (live signals, all markets)
   function ledgerStats(closed) {
@@ -1871,7 +1954,7 @@ const AF = (() => {
   }
   function renderJournalFilter() {
     const sel = $('#jMarket'), v = sel.value || 'all', used = [...new Set(ledger.map(t => t.mk))];
-    sel.innerHTML = `<option value="all">All markets</option>` + MARKETS.filter(m => used.includes(m.id)).map(m => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+    sel.innerHTML = `<option value="all">All markets</option>` + used.map(id => `<option value="${id}">${esc(byId[id] ? byId[id].def.label : (ledger.find(t => t.mk === id) || {}).label || id)}</option>`).join('');
     sel.value = [...sel.options].some(o => o.value === v) ? v : 'all';
   }
   function renderJournal() {
