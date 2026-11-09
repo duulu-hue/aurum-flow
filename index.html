@@ -283,7 +283,7 @@ tr.open td{background:var(--gold-soft)}
       </section>
       <section>
         <h4>Trade management</h4>
-        <p>Stop goes beyond the swept fractal or the bar extreme, never closer than 0.8× ATR, so it sits outside the noise. TP1 is the nearer of POC and VWAP; TP2 is the far value edge, a σ band or an untaken swing. Half is banked at TP1 and the stop moves to breakeven. Trades time out after 240 bars. If a bar touches both stop and target, the journal counts the stop.</p>
+        <p>Stop goes beyond the swept level or the bar extreme. It is never closer than 0.8× the 1m ATR, 0.6× the 15m ATR, or 8× your trading costs, whichever is widest, so normal gold noise and spread cannot take it out. TP1 is the nearer of POC and VWAP; TP2 is the far value edge, a σ band or an untaken swing. Half is banked at TP1 and the stop moves to breakeven. Trades time out after 240 bars. If a bar touches both stop and target, the journal counts the stop.</p>
         <p>Pips on gold: 1 pip = $0.10. Losses are counted in pips too, so net pips is real.</p>
       </section>
     </div>
@@ -456,6 +456,13 @@ const AF = (() => {
     return { i0, i1, lo, arr, total, max: arr[poc], pocJ: poc, vaJ: [a, b], poc: P(poc), val: P(a), vah: P(b), low: P(0), high: P(arr.length - 1), hvn, lvn };
   }
 
+  function htfAtr(S) {
+    const B = S.htfBars, n = Math.min(14, B.length);
+    if (n < 3) return 0;
+    let s = 0; for (let i = B.length - n; i < B.length; i++) s += B[i].h - B[i].l;
+    return s / n;
+  }
+
   function persistence(S, k, bin) {
     let n = 0;
     for (let j = Math.max(0, k - 9); j <= k; j++) {
@@ -564,8 +571,11 @@ const AF = (() => {
     const entry = b.c;
     let extreme = up ? Math.min(b.l, k ? S.bars[k - 1].l : b.l) : Math.max(b.h, k ? S.bars[k - 1].h : b.h);
     if (swept) extreme = up ? Math.min(extreme, swept.price) : Math.max(extreme, swept.price);
+    // stop floor: outside 1m noise, at least ~0.6 of a higher-timeframe candle, and wide enough that costs stay under 1/8 of the risk
+    const hAtr = htfAtr(S), minRisk = Math.max(0.8 * atr, 0.6 * hAtr, 8 * (S.params.costPrice || 0));
+    const maxRisk = Math.max(4 * atr, 1.5 * hAtr, minRisk);
     let sl = extreme - d * Math.max(0.2 * atr, 2 * S.pip);
-    if (d * (entry - sl) < 0.8 * atr) sl = entry - d * 0.8 * atr;
+    if (d * (entry - sl) < minRisk) sl = entry - d * minRisk;
     const risk = d * (entry - sl);
     const ahead = (p, min) => p != null && isFinite(p) && d * (p - entry) >= min;
     const untaken = [];
@@ -613,7 +623,7 @@ const AF = (() => {
 
     // 6. Room to target
     const room = { key: 'room', label: 'Room to target', max: 10, pts: 0, detail: '' };
-    if (risk > 4 * atr) room.detail = `Stop would be ${(risk / atr).toFixed(1)}× ATR. Too wide.`;
+    if (risk > maxRisk + 1e-9) room.detail = `Stop would be ${Math.round(risk / S.pip)} pips. Too wide for this setup.`;
     else if (rr1 >= 1.5) { room.pts = 10; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R.`; }
     else if (rr1 >= 1.0) { room.pts = 6; room.detail = `TP1 ${t1[1]} pays ${rr1.toFixed(1)}R. Tight.`; }
     else room.detail = `Only ${rr1.toFixed(1)}R to TP1 ${t1[1]}. Not enough room.`;
@@ -622,7 +632,7 @@ const AF = (() => {
     let pts = 0, max = 0;
     for (const x of factors) if (!x.na) { pts += x.pts; max += x.max; }
     const score = Math.round(100 * pts / max);
-    const fire = loc.pts > 0 && trig.pts > 0 && rr1 >= S.params.minRR && risk <= 4 * atr && score >= S.params.threshold;
+    const fire = loc.pts > 0 && trig.pts > 0 && rr1 >= S.params.minRR && risk <= maxRisk + 1e-9 && score >= S.params.threshold;
     return {
       dir: d, factors, score, fire, entry, sl, risk, tp1: t1[0], tp1Name: t1[1], tp2: t2[0], tp2Name: t2[1], rr1, rr2,
       setup: cont ? 'Trend pullback' : (loc.pts && trig.pts ? 'Value-edge reversal' : 'Value-edge reversal'),
@@ -1615,7 +1625,7 @@ const AF = (() => {
   const showOff = () => { $('#offv').textContent = sgn(cfg.offset); };
   showOff();
   $('#broker').onchange = e => { cfg.broker = e.target.value; saveCfg(); };
-  $('#cost').onchange = e => { const v = parseFloat(e.target.value); cfg.cost = isFinite(v) && v >= 0 ? v : 3; e.target.value = cfg.cost; saveCfg(); };
+  $('#cost').onchange = e => { const v = parseFloat(e.target.value); cfg.cost = isFinite(v) && v >= 0 ? v : 3; e.target.value = cfg.cost; saveCfg(); if (S) { S.params.costPrice = cfg.cost * 0.1; panelDirty = true; } };
   $('#calib').onclick = () => {
     const v = parseFloat(String($('#mt5px').value).replace(',', '.'));
     const ref = midPrice() || (S.cur && S.cur.c);
@@ -1744,7 +1754,7 @@ const AF = (() => {
   $('#lookback').onchange = e => { S.params.lookback = +e.target.value; S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
   const keepLive = N => { N.liveFrom = S.liveFrom; N.cur = S.cur; N.liveBook = S.liveBook; clearHistoryActive(N); return N; };
   $('#rerun').onclick = () => { S = keepLive(AF.rebuild(S)); afterRebuild(); };
-  const readParams = P => { P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; };
+  const readParams = P => { P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.costPrice = cfg.cost * 0.1; };
   $('#trigMode').onchange = $('#useHTF').onchange = () => { readParams(S.params); S = keepLive(AF.rebuild(S)); afterRebuild(); };
   const reEval = () => S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
