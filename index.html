@@ -126,7 +126,7 @@ tr.open td{background:var(--gold-soft)}
 .chip.feed{color:var(--muted)} .chip.feed.ok{color:var(--up);border-color:rgba(51,195,160,.45);background:var(--up-soft)} .chip.feed.warn{color:var(--gold);border-color:rgba(226,179,73,.45);background:var(--gold-soft)} .chip.feed.bad{color:var(--down);border-color:rgba(238,106,90,.45);background:var(--down-soft)}
 .feednote{font-size:12.5px;color:var(--gold);margin:10px 0 0}
 .setup{margin-top:14px}
-.setup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+.setup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
 .setcol{min-width:0;display:flex;flex-direction:column;gap:10px}
 .setcol h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .frow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
@@ -139,6 +139,21 @@ tr.open td{background:var(--gold-soft)}
 .steps{margin:0;padding-left:18px;font-size:12.5px;color:#c3cbda;display:flex;flex-direction:column;gap:4px}
 .mt5{font-size:12.5px;color:var(--muted);margin:0 0 10px;font-family:var(--f-mono)}
 .mt5 b{color:var(--fg);font-weight:500}
+.mstrip{display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-block:12px 2px;scrollbar-width:thin}
+.wchip{display:flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;cursor:pointer}
+.wchip.sel{border-color:var(--gold);background:var(--gold-soft)}
+.wchip .wl{font-family:var(--f-display);font-weight:600}
+.wchip .wp{color:var(--muted);font-size:12px}
+.wchip b{font-family:var(--f-display);font-size:11px;letter-spacing:.06em}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint)} .dot.ok{background:var(--up)} .dot.warn{background:var(--gold)} .dot.bad{background:var(--down)}
+.feednote.rng{color:var(--down)}
+.mkts{display:flex;flex-direction:column;gap:10px}
+.mgroup{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.mgroup legend{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:0 4px}
+.mgroup .chk{display:flex;align-items:center;gap:6px;font-size:13px}
+.mgroup input{accent-color:var(--gold)}
+.jbar{gap:8px}
+.jbar select{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px}
 .jbar{display:flex;justify-content:flex-end;margin:-6px 0 12px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -164,6 +179,7 @@ tr.open td{background:var(--gold-soft)}
     <button class="btn" id="toLive" type="button" hidden>Back to live</button>
   </div>
 </header>
+<nav class="mstrip" id="watch" aria-label="Markets"></nav>
 <p class="err" id="err" hidden></p>
 <p class="feednote" id="feedNote" hidden></p>
 
@@ -171,11 +187,16 @@ tr.open td{background:var(--gold-soft)}
   <div class="setup-grid">
     <div class="setcol">
       <h3>MT5 price match</h3>
-      <p class="hintp">Binance gold and your broker's XAUUSD differ by a little. Match them once so every signal also shows levels for your MT5 chart.</p>
+      <p class="hintp">The data feeds and your broker's prices differ by a little. Pick a market in the strip above, then match it once so its signals also show levels for your MT5 chart. Leave at zero to skip.</p>
       <div class="frow"><label for="broker">Broker</label><select id="broker"><option>Exness</option><option>Valetax</option><option>Other</option></select></div>
-      <div class="frow"><label for="mt5px">Your MT5 price now</label><input id="mt5px" inputmode="decimal" placeholder="e.g. 4172.85" autocomplete="off"><button class="btn" id="calib" type="button">Match</button></div>
+      <div class="frow"><label for="mt5px" id="calLabel">Your MT5 price now</label><input id="mt5px" inputmode="decimal" placeholder="e.g. 4172.85" autocomplete="off"><button class="btn" id="calib" type="button">Match</button></div>
       <p class="hintp">Offset: <b class="num" id="offv">+0.00</b>. <span id="calMsg">Read the bid on your demo MT5 and press Match while price is steady.</span></p>
-      <div class="frow"><label for="cost">Costs per trade (pips)</label><input id="cost" inputmode="decimal" style="max-width:90px" autocomplete="off"></div>
+      <div class="frow"><label for="cost" id="costLabel">Costs per trade (pips)</label><input id="cost" inputmode="decimal" style="max-width:90px" autocomplete="off"></div>
+    </div>
+    <div class="setcol">
+      <h3>Markets to scan</h3>
+      <p class="hintp">Every ticked market is watched at the same time. Signals from any of them go to Telegram and the journal.</p>
+      <div id="mkts" class="mkts"></div>
     </div>
     <div class="setcol">
       <h3>Telegram alerts</h3>
@@ -232,7 +253,7 @@ tr.open td{background:var(--gold-soft)}
       </div>
       <div class="thrrow">
         <label for="trigMode">Entry trigger</label>
-        <select id="trigMode"><option value="flow" selected>Order flow only</option><option value="fractal">Fractal sweep</option></select>
+        <select id="trigMode"><option value="flow" selected>Order flow (rejection candle where no flow)</option><option value="fractal">Fractal sweep</option></select>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useHTF" checked style="accent-color:var(--gold)"> HTF structure</label>
       </div>
     </div>
@@ -249,13 +270,13 @@ tr.open td{background:var(--gold-soft)}
   </div>
   <div class="pane" id="pane-journal">
     <div class="notice" id="notice"></div>
-    <div class="jbar"><button class="btn" id="csvOut" type="button">Download journal (CSV)</button></div>
+    <div class="jbar"><select id="jMarket" aria-label="Filter journal by market"><option value="all">All markets</option></select><button class="btn" id="csvOut" type="button">Download journal (CSV)</button></div>
     <div class="stats" id="stats"></div>
     <div class="eqbox"><canvas id="eq"></canvas></div>
-    <div class="tablewrap"><table><thead><tr><th>#</th><th>Time</th><th>Side</th><th>Setup</th><th class="num">Score</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Pips</th><th>Outcome</th></tr></thead><tbody id="tbody"></tbody></table></div>
+    <div class="tablewrap"><table><thead><tr><th>#</th><th>Market</th><th>Time</th><th>Side</th><th>Setup</th><th class="num">Score</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Pips / pts</th><th>Outcome</th></tr></thead><tbody id="tbody"></tbody></table></div>
   </div>
   <div class="pane" id="pane-hist" hidden>
-    <p class="hintp" style="margin-bottom:12px">Runs the engine on past Binance XAUUSDT 1-minute bars with real buyer and seller volume, using your threshold, lookback and costs. Four versions run side by side so you can see which works. The order-book factor is left out because the book has no history; the live journal measures that part.</p>
+    <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. Four versions run side by side so you can see which works. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th></tr></thead><tbody id="histBody"></tbody></table></div>
@@ -319,7 +340,7 @@ const AF = (() => {
       opts: o, mode: o.mode, symbol: o.symbol, BIN: o.bin, pip: o.pip, dec: o.dec,
       interval: o.interval, htfMult: o.htfMult,
       tfLabel: intervalLabel(o.interval), htfLabel: intervalLabel(o.interval * o.htfMult),
-      hasBook: o.mode !== 'csv', hasFlow: o.mode !== 'csv',
+      hasBook: o.hasBook ?? (o.mode !== 'csv'), hasFlow: o.hasFlow ?? (o.mode !== 'csv'),
       bars: [], cur: null, liveBook: null,
       atr: [], vwap: [], vsd: [], sessStart: [], delta: [], cvd: [],
       sess: { id: null, pv: 0, p2v: 0, v: 0, start: 0 },
@@ -561,9 +582,12 @@ const AF = (() => {
     }
     if (S.params.trigger === 'flow') swept = null;
     if (S.params.trigger === 'flow') {
-      if (flow.pts >= 10 && d * (b.c - (up ? prof.val : prof.vah)) >= -0.6 * atr) {
+      const inside = d * (b.c - (up ? prof.val : prof.vah)) >= -0.6 * atr;
+      if (S.hasFlow && flow.pts >= 10 && inside) {
         trig.pts = 15; trig.detail = `Order-flow trigger at the edge: ${up ? 'buyers' : 'sellers'} took control on this bar.`;
-      } else trig.detail = 'Waiting for absorption or delta divergence at the edge.';
+      } else if (!S.hasFlow && flow.pts >= 6 && inside) {
+        trig.pts = 13; trig.detail = `Price-action trigger: a rejection candle at the edge closed in its ${up ? 'upper' : 'lower'} part.`;
+      } else trig.detail = S.hasFlow ? 'Waiting for absorption or delta divergence at the edge.' : 'Waiting for a rejection candle at the edge.';
     } else if (swept) {
       trig.pts = swept.tf === 'H' ? 20 : 17;
       trig.detail = `Swept the ${swept.tf === 'H' ? htfWord : ltfWord} fractal ${up ? 'low' : 'high'} at ${f(swept.price)} and closed back ${up ? 'above' : 'below'} it.`;
@@ -1275,11 +1299,11 @@ const AF = (() => {
         <div class="sig-title">${esc(t.setup)} · score ${t.score}</div>
         <div class="levels">
           <div class="lv"><span>Entry</span><b>${fmt(t.entry)}</b><small>${tfmt(t.t)}</small></div>
-          <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + ' pips risk'}</small></div>
+          <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
           <div class="lv"><span>TP1</span><b class="up">${fmt(t.tp1)}</b><small>${esc(t.tp1Name)} · ${t.rr1.toFixed(1)}R</small></div>
           <div class="lv"><span>TP2</span><b class="up">${fmt(t.tp2)}</b><small>${esc(t.tp2Name)} · ${t.rr2.toFixed(1)}R</small></div>
         </div>
-        ${live ? `<p class="mt5">On your ${esc(t.broker)} MT5 (offset ${sgn(t.offset)}): entry <b>${m5(t, t.entry)}</b> · stop <b>${m5(t, t.sl)}</b> · TP1 <b>${m5(t, t.tp1)}</b> · TP2 <b>${m5(t, t.tp2)}</b></p>` : ''}
+        ${live && t.offset ? `<p class="mt5">On your ${esc(t.broker)} MT5 (offset ${sgn(t.offset)}): entry <b>${m5(t, t.entry)}</b> · stop <b>${m5(t, t.sl)}</b> · TP1 <b>${m5(t, t.tp1)}</b> · TP2 <b>${m5(t, t.tp2)}</b></p>` : ''}
         <p class="narr">${esc(t.narrative)}</p>`;
       return;
     }
@@ -1298,7 +1322,7 @@ const AF = (() => {
     const bw = walls(S.liveBook || S.bars[e.k].book, price, -1), aw = walls(S.liveBook || S.bars[e.k].book, price, 1);
     const sdOk = e.sdOk;
     const lowEdge = sdOk ? Math.max(p.val, e.vw - e.sd) : p.val, hiEdge = sdOk ? Math.min(p.vah, e.vw + e.sd) : p.vah;
-    const last = (live ? ledger : S.trades).filter(x => x.result !== null).slice(-1)[0];
+    const last = (live ? ledgerFor(cur.def.id) : S.trades).filter(x => x.result !== null).slice(-1)[0];
     el.innerHTML = `<div class="sig-head"><span class="pill flat">STAND ASIDE</span><span class="muted num">${fmt(price)}</span></div>
       <div class="sig-title">Price is ${where}.</div>
       <p class="narr" style="margin-top:8px">${esc(why)} The engine wants price at an edge, a trigger there, and order flow that confirms.</p>
@@ -1340,7 +1364,8 @@ const AF = (() => {
       rows.push(['Nearest ask wall', aw ? `${fmt(aw.p)} · ${Math.round(aw.sz)} lots` : '–']);
       rows.push(['Nearest bid wall', bw ? `${fmt(bw.p)} · ${Math.round(bw.sz)} lots` : '–']);
     }
-    if (live) rows.push(['Your MT5 price', `${(price + cfg.offset).toFixed(2)} <span class="muted">(${esc(cfg.broker)} ${sgn(cfg.offset)})</span>`]);
+    if (live && cfg.offset) rows.push(['Your MT5 price', `${(price + cfg.offset).toFixed(S.dec)} <span class="muted">(${esc(cfg.broker)} ${sgn(cfg.offset)})</span>`]);
+    if (live && cur.def.src !== 'binance') rows.push(['Data', `<span class="muted">${cur.def.rng ? 'Random-generated index, no volume' : 'Prices only, no volume'}</span>`]);
     $('#read').innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('');
   }
 
@@ -1390,27 +1415,73 @@ const AF = (() => {
     x.strokeStyle = col; x.lineWidth = 1.6; x.stroke();
     x.fillStyle = col; x.beginPath(); x.arc(X(curve.length - 1), Y(last), 3, 0, 7); x.fill();
   }
-  // ============================================================ LIVE: settings, journal, feed
+  // ============================================================ LIVE: multi-market scanner
   const LS = {
     get(k, d) { try { const v = localStorage.getItem('aurum-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem('aurum-' + k, JSON.stringify(v)); } catch { } }
   };
-  const cfg = Object.assign({ broker: 'Exness', offset: 0, cost: 3, tgToken: '', tgChat: '', tgOn: false }, LS.get('cfg', {}));
+  const nice = x => { const p = Math.pow(10, Math.floor(Math.log10(x))), m = x / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; };
+  const med = a => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1] || 0; };
+
+  // ---------------- markets
+  const MARKETS = [
+    { id: 'BIN:XAUUSDT', src: 'binance', sym: 'XAUUSDT', label: 'XAUUSD', name: 'Gold', group: 'Metals · Binance order book', bin: 0.5, pip: 0.1, dec: 2, cost: 3, on: true },
+    { id: 'BIN:XAGUSDT', src: 'binance', sym: 'XAGUSDT', label: 'XAGUSD', name: 'Silver', group: 'Metals · Binance order book', pip: 0.01, dec: 3, cost: 3, on: true },
+    { id: 'DER:frxEURUSD', src: 'deriv', sym: 'frxEURUSD', label: 'EURUSD', name: 'Euro / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1, on: true },
+    { id: 'DER:frxGBPUSD', src: 'deriv', sym: 'frxGBPUSD', label: 'GBPUSD', name: 'Pound / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.2, on: true },
+    { id: 'DER:frxUSDJPY', src: 'deriv', sym: 'frxUSDJPY', label: 'USDJPY', name: 'US dollar / Yen', group: 'Forex · Deriv prices', pip: 0.01, dec: 3, cost: 1.2, on: true },
+    { id: 'DER:frxAUDUSD', src: 'deriv', sym: 'frxAUDUSD', label: 'AUDUSD', name: 'Aussie / US dollar', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.2, on: false },
+    { id: 'DER:frxUSDCAD', src: 'deriv', sym: 'frxUSDCAD', label: 'USDCAD', name: 'US dollar / Loonie', group: 'Forex · Deriv prices', pip: 0.0001, dec: 5, cost: 1.5, on: false },
+    { id: 'DER:R_75', src: 'deriv', sym: 'R_75', label: 'V75', name: 'Volatility 75 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: true },
+    { id: 'DER:R_100', src: 'deriv', sym: 'R_100', label: 'V100', name: 'Volatility 100 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
+    { id: 'DER:BOOM1000', src: 'deriv', sym: 'BOOM1000', label: 'Boom 1000', name: 'Boom 1000 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
+    { id: 'DER:CRASH1000', src: 'deriv', sym: 'CRASH1000', label: 'Crash 1000', name: 'Crash 1000 Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false },
+    { id: 'DER:stpRNG', src: 'deriv', sym: 'stpRNG', label: 'Step', name: 'Step Index', group: 'Synthetics · random by design', rng: true, cost: 0, on: false }
+  ];
+
+  // ---------------- settings (this device only)
+  const cfg = Object.assign({ broker: 'Exness', offsets: {}, costs: {}, enabled: {}, sel: 'BIN:XAUUSDT', tgToken: '', tgChat: '', tgOn: false }, LS.get('cfg', {}));
+  if (typeof cfg.offset === 'number') { cfg.offsets['BIN:XAUUSDT'] = cfg.offset; } delete cfg.offset;
+  if (typeof cfg.cost === 'number') { cfg.costs['BIN:XAUUSDT'] = cfg.cost; } delete cfg.cost;
+  for (const m of MARKETS) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on;
+  Object.defineProperty(cfg, 'offset', { get: () => cfg.offsets[cur.def.id] || 0, enumerable: false });
   const saveCfg = () => LS.set('cfg', cfg);
-  const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)}`;
+  const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(cur && cur.def.dec ? Math.min(cur.def.dec, 5) : 2)}`;
+  const costPips = inst => cfg.costs[inst.def.id] ?? inst.def.cost;
+  const unitWord = def => def.rng ? 'points' : 'pips';
 
-  // ---------------- live signal journal (this device)
+  // ---------------- instruments
+  const insts = MARKETS.map(def => ({
+    def, S: null, warm: false, starting: false, note: '', lastTick: 0, clockOff: 0, pend: [], lastPx: null,
+    bids: new Map(), asks: new Map(), synced: false, snapId: null, lastU: null, buf: [], mode: 'diff', depthWs: null, tradeWs: null, depthOk: false, tradeOk: false, snapBusy: false
+  }));
+  const byId = Object.fromEntries(insts.map(i => [i.def.id, i]));
+  let cur = byId[cfg.sel] || insts[0];
+  let live = true;
+
+  function storeFor(inst) {
+    const d = inst.def;
+    return AF.createStore({ mode: d.src === 'binance' ? 'live' : 'tick', hasBook: d.src === 'binance', hasFlow: d.src === 'binance', symbol: d.label, bin: d.bin, pip: d.pip, dec: d.dec, interval: 60000, htfMult: 15 });
+  }
+
+  // ---------------- live signal journal (this device, all markets)
   let ledger = LS.get('ledger', []);
-  const saveLedger = () => LS.set('ledger', ledger.slice(-1000));
-  const openSignal = () => ledger.find(x => x.result === null) || null;
+  for (const t of ledger) { if (!t.mk) { t.mk = 'BIN:XAUUSDT'; t.label = 'XAUUSD'; t.pip = 0.1; t.dec = 2; } }
+  const saveLedger = () => LS.set('ledger', ledger.slice(-2000));
+  const ledgerFor = id => ledger.filter(x => x.mk === id);
+  const openSignalFor = id => ledger.find(x => x.mk === id && x.result === null) || null;
+  const openSignal = () => openSignalFor(cur.def.id);
   const signalR = (t, price) => { const r = t.dir * (price - t.entry) / t.risk; return t.stage ? t.realized + 0.5 * r : r; };
-  const costR = t => (t.cost * 0.1) / t.risk;
+  const costR = t => (t.cost * t.pip) / t.risk;
+  const m5 = (t, x) => (x + t.offset).toFixed(t.dec);
 
-  function addSignal(tr) {
+  function addSignal(inst, tr) {
+    const d = inst.def, S_ = inst.S;
     const t = {
-      id: Date.now(), t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score, entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2,
-      tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2, narrative: tr.narrative, stage: 0, realized: 0,
-      status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + 60000, offset: cfg.offset, cost: cfg.cost, broker: cfg.broker
+      id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
+      entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2, tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2,
+      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + 60000,
+      offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker
     };
     ledger.push(t); saveLedger(); notify('open', t); journalDirty = panelDirty = true;
   }
@@ -1431,7 +1502,7 @@ const AF = (() => {
     if (time - t.t >= 240 * 60000) closeSig(t, t.stage ? t.realized + 0.5 * R(close) : R(close), 'Timed out', time);
   }
   function closeSig(t, gross, status, time) {
-    t.gross = gross; t.result = gross - costR(t); t.status = status; t.exitT = time; t.pips = t.result * t.risk / 0.1;
+    t.gross = gross; t.result = gross - costR(t); t.status = status; t.exitT = time; t.pips = t.result * t.risk / t.pip;
     saveLedger(); notify('close', t); journalDirty = panelDirty = true;
   }
 
@@ -1443,205 +1514,315 @@ const AF = (() => {
     try { const r = await fetch(url, { method: 'POST', body }); return r.ok; }
     catch { try { await fetch(url, { method: 'POST', body, mode: 'no-cors' }); return true; } catch { return false; } }
   }
-  const m5 = (t, x) => (x + t.offset).toFixed(2);
   function sigText(kind, t) {
-    const f = x => x.toFixed(2), side = t.dir > 0 ? 'BUY' : 'SELL';
-    if (kind === 'open') return `${side} XAUUSD · ${t.setup} · score ${t.score}\n` +
+    const f = x => x.toFixed(t.dec), side = t.dir > 0 ? 'BUY' : 'SELL', u = byId[t.mk] && byId[t.mk].def.rng ? 'points' : 'pips';
+    if (kind === 'open') return `${side} ${t.label} · ${t.setup} · score ${t.score}\n` +
       `Entry ${f(t.entry)} | SL ${f(t.sl0)} | TP1 ${f(t.tp1)} | TP2 ${f(t.tp2)}\n` +
-      `On ${t.broker} MT5 (offset ${sgn(t.offset)}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` +
-      `Risk ${Math.round(t.risk / 0.1)} pips · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
-    if (kind === 'tp1') return `TP1 hit: ${side} XAUUSD from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
-    return `${t.status}: ${side} XAUUSD from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} pips after costs.`;
+      (t.offset ? `On ${t.broker} MT5 (offset ${t.offset >= 0 ? '+' : ''}${t.offset}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` : '') +
+      `Risk ${Math.round(t.risk / t.pip)} ${u} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
+    if (kind === 'tp1') return `TP1 hit: ${side} ${t.label} from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
+    return `${t.status}: ${side} ${t.label} from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} ${u} after costs.`;
   }
-  function notify(kind, t) { if (live) tg(sigText(kind, t)); }
+  function notify(kind, t) { tg(sigText(kind, t)); }
 
-  // a trade the engine opened on history must not block or decorate the live record
+  // ---------------- shared bar building
+  function newBar(inst, t, p) { inst.S.cur = { t, o: p, h: p, l: p, c: p, v: 0, bv: 0, sv: 0, pv: 0, p2v: 0, fp: new Map(), book: null }; }
+  function finishBar(inst, bar) {
+    if (inst.def.src === 'deriv') { bar.fp = null; delete bar.nb; delete bar.ns; }  // already time-weighted in ingest
+    else bar.book = bookSnap(inst) || inst.S.liveBook;
+    return bar;
+  }
+  function closeCurrent(inst) {
+    const S_ = inst.S, bar = finishBar(inst, S_.cur), before = S_.trades.length;
+    AF.closeBar(S_, bar);
+    if (S_.trades.length > before) { const tr = S_.trades[S_.trades.length - 1]; if (tr.k >= S_.liveFrom && !openSignalFor(inst.def.id)) addSignal(inst, tr); }
+    const o = openSignalFor(inst.def.id); if (o) { o.lastSeen = bar.t + 60000; saveLedger(); }
+    newBar(inst, bar.t + 60000, bar.c);
+    if (inst === cur) panelDirty = journalDirty = dirty = true; else journalDirty = true;
+  }
+  function rollTo(inst, t) { let n = 0; while (inst.S.cur && t >= inst.S.cur.t + 60000 && n++ < 600) closeCurrent(inst); }
+  function ingest(inst, p, q, sellerAgg, t) {
+    rollTo(inst, t);
+    const b = inst.S.cur; if (!b || t < b.t) return;
+    b.c = p; if (p > b.h) b.h = p; if (p < b.l) b.l = p;
+    const bv = sellerAgg ? 0 : q, sv = sellerAgg ? q : 0;
+    if (inst.def.src === 'deriv') {
+      // keep the live minute on the same time-weighted footing as history: one unit per minute
+      b.nb = (b.nb || 0) + (sellerAgg ? 0 : 1); b.ns = (b.ns || 0) + (sellerAgg ? 1 : 0);
+      const n = b.nb + b.ns, tp = (b.h + b.l + b.c) / 3, rg = b.h - b.l;
+      b.v = 1; b.bv = b.nb / n; b.sv = b.ns / n; b.pv = tp; b.p2v = tp * tp + rg * rg / 12;
+    } else {
+      b.v += q; b.bv += bv; b.sv += sv; b.pv += p * q; b.p2v += p * p * q;
+      const bin = Math.round(p / inst.S.BIN), f = b.fp.get(bin); if (f) { f[0] += bv; f[1] += sv; } else b.fp.set(bin, [bv, sv]);
+    }
+    inst.lastPx = p; inst.lastTick = Date.now();
+    const o = openSignalFor(inst.def.id); if (o) stepSignal(o, p, p, p, t);
+    if (inst === cur) dirty = true;
+  }
+  function kBar(t, o, h, l, c, v, bv) { const tp = (h + l + c) / 3, rg = h - l; return { t, o, h, l, c, v, bv, sv: v - bv, pv: tp * v, p2v: v * (tp * tp + rg * rg / 12), fp: null, book: null }; }
+
+  // seed a store with history bars; the last, still-forming bar becomes the live bar
+  function seedStore(inst, bars, nowMs) {
+    const d = inst.def;
+    if (!d.bin) d.bin = Math.max(d.pip || 0, nice((med(bars.slice(-600).map(b => b.h - b.l)) || (d.pip || 0.0001) * 10) / 6));
+    const S_ = storeFor(inst); readParams(S_.params, inst);
+    let forming = null;
+    for (const b of bars) { if (b.t + 60000 > nowMs) { forming = b; continue; } AF.closeBar(S_, b); }
+    S_.liveFrom = S_.bars.length;
+    clearHistoryActive(S_);
+    inst.S = S_;
+    if (forming) { newBar(inst, forming.t, forming.o); Object.assign(S_.cur, { h: forming.h, l: forming.l, c: forming.c }); }
+    else newBar(inst, Math.floor(nowMs / 60000) * 60000, S_.bars.length ? S_.bars[S_.bars.length - 1].c : 0);
+    const o = openSignalFor(d.id);
+    if (o) { for (const b of S_.bars) if (b.t + 60000 > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + 60000); if (o.result === null) { o.lastSeen = nowMs; saveLedger(); } }
+    inst.lastPx = S_.cur.c;
+  }
   function clearHistoryActive(N) {
     const a = N.active;
     if (a && (N.liveFrom === undefined || a.k < N.liveFrom)) { a.status = 'Open when history ended'; a.exitIdx = Math.max(a.k, N.bars.length - 1); N.active = null; N.cooldownUntil = 0; }
   }
 
-  // ---------------- Binance USDⓈ-M XAUUSDT feed
-  const SYMBOL = 'XAUUSDT', sym = 'xauusdt', REST = 'https://fapi.binance.com';
+  // ---------------- Binance (order book + trades)
+  const REST = 'https://fapi.binance.com';
   const WS_PUBLIC = 'wss://fstream.binance.com/public/stream?streams=', WS_MARKET = 'wss://fstream.binance.com/market/stream?streams=';
-  const feed = { bids: new Map(), asks: new Map(), synced: false, snapId: null, lastU: null, buf: [], mode: 'diff', depthWs: null, tradeWs: null, clockOff: 0, lastTrade: 0, warm: false, pend: [], note: '', depthOk: false, tradeOk: false, snapBusy: false };
-  let live = true;
-
-  function connectDepth() {
-    const old = feed.depthWs; feed.depthWs = null; try { old && old.close(); } catch { }
-    feed.synced = false; feed.buf = []; feed.snapId = null; feed.lastU = null;
-    const ws = new WebSocket(WS_PUBLIC + (feed.mode === 'diff' ? `${sym}@depth@100ms` : `${sym}@depth20@100ms`));
-    feed.depthWs = ws;
-    ws.onopen = () => { feed.depthOk = true; if (feed.mode === 'diff') snapshot(); };
-    ws.onmessage = m => { if (feed.depthWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } onDepth(d.data || d); };
-    ws.onclose = () => { if (feed.depthWs === ws) { feed.depthOk = false; setTimeout(connectDepth, 3000); } };
+  function binConnectDepth(inst) {
+    const old = inst.depthWs; inst.depthWs = null; try { old && old.close(); } catch { }
+    if (!cfg.enabled[inst.def.id]) return;
+    inst.synced = false; inst.buf = []; inst.snapId = null; inst.lastU = null;
+    const s = inst.def.sym.toLowerCase();
+    const ws = new WebSocket(WS_PUBLIC + (inst.mode === 'diff' ? `${s}@depth@100ms` : `${s}@depth20@100ms`));
+    inst.depthWs = ws;
+    ws.onopen = () => { inst.depthOk = true; if (inst.mode === 'diff') binSnapshot(inst); };
+    ws.onmessage = m => { if (inst.depthWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } binOnDepth(inst, d.data || d); };
+    ws.onclose = () => { if (inst.depthWs === ws) { inst.depthOk = false; setTimeout(() => binConnectDepth(inst), 3000); } };
     ws.onerror = () => { try { ws.close(); } catch { } };
   }
-  async function snapshot() {
-    if (feed.snapBusy) return; feed.snapBusy = true;
+  async function binSnapshot(inst) {
+    if (inst.snapBusy) return; inst.snapBusy = true;
     try {
-      const r = await fetch(`${REST}/fapi/v1/depth?symbol=${SYMBOL}&limit=1000`);
+      const r = await fetch(`${REST}/fapi/v1/depth?symbol=${inst.def.sym}&limit=1000`);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const s = await r.json();
-      feed.bids = new Map(s.bids.map(([p, q]) => [p, +q])); feed.asks = new Map(s.asks.map(([p, q]) => [p, +q]));
-      feed.snapId = s.lastUpdateId; feed.synced = false;
-      const buf = feed.buf; feed.buf = [];
-      for (const ev of buf) applyDiff(ev);
+      inst.bids = new Map(s.bids.map(([p, q]) => [p, +q])); inst.asks = new Map(s.asks.map(([p, q]) => [p, +q]));
+      inst.snapId = s.lastUpdateId; inst.synced = false;
+      const buf = inst.buf; inst.buf = [];
+      for (const ev of buf) binApplyDiff(inst, ev);
     } catch (e) {
-      feed.mode = 'partial'; feed.note = 'The full order book snapshot was blocked, so the book shows the top 20 levels each side.';
-      feed.snapBusy = false; connectDepth(); return;
+      inst.mode = 'partial'; inst.note = 'The full order book snapshot was blocked, so the book shows the top 20 levels each side.';
+      inst.snapBusy = false; binConnectDepth(inst); return;
     }
-    feed.snapBusy = false;
+    inst.snapBusy = false;
   }
-  function applyLevels(map, levels) { for (const [p, q] of levels || []) { const v = +q; if (v === 0) map.delete(p); else map.set(p, v); } }
-  function resync(ev) { feed.synced = false; feed.snapId = null; feed.buf = ev ? [ev] : []; snapshot(); }
-  function applyDiff(ev) {
-    if (feed.snapId === null) { feed.buf.push(ev); if (feed.buf.length > 3000) feed.buf.shift(); return; }
-    if (!feed.synced) {
-      if (ev.u < feed.snapId) return;
-      if (ev.U > feed.snapId) return resync(ev);
-      feed.synced = true;
-    } else if (ev.pu !== feed.lastU) return resync(ev);
-    applyLevels(feed.bids, ev.b); applyLevels(feed.asks, ev.a); feed.lastU = ev.u;
+  function binLevels(map, levels) { for (const [p, q] of levels || []) { const v = +q; if (v === 0) map.delete(p); else map.set(p, v); } }
+  function binResync(inst, ev) { inst.synced = false; inst.snapId = null; inst.buf = ev ? [ev] : []; binSnapshot(inst); }
+  function binApplyDiff(inst, ev) {
+    if (inst.snapId === null) { inst.buf.push(ev); if (inst.buf.length > 3000) inst.buf.shift(); return; }
+    if (!inst.synced) {
+      if (ev.u < inst.snapId) return;
+      if (ev.U > inst.snapId) return binResync(inst, ev);
+      inst.synced = true;
+    } else if (ev.pu !== inst.lastU) return binResync(inst, ev);
+    binLevels(inst.bids, ev.b); binLevels(inst.asks, ev.a); inst.lastU = ev.u;
   }
-  function onDepth(d) {
-    if (feed.mode === 'partial') {
-      feed.bids = new Map((d.b || d.bids || []).map(([p, q]) => [p, +q]));
-      feed.asks = new Map((d.a || d.asks || []).map(([p, q]) => [p, +q]));
-      feed.synced = true; return;
+  function binOnDepth(inst, d) {
+    if (inst.mode === 'partial') {
+      inst.bids = new Map((d.b || d.bids || []).map(([p, q]) => [p, +q])); inst.asks = new Map((d.a || d.asks || []).map(([p, q]) => [p, +q]));
+      inst.synced = true; return;
     }
-    if (d.e === 'depthUpdate') applyDiff(d);
+    if (d.e === 'depthUpdate') binApplyDiff(inst, d);
   }
-  function midPrice() {
+  function midOf(inst) {
     let bb = -Infinity, ba = Infinity;
-    for (const p of feed.bids.keys()) { const v = +p; if (v > bb) bb = v; }
-    for (const p of feed.asks.keys()) { const v = +p; if (v < ba) ba = v; }
+    for (const p of inst.bids.keys()) { const v = +p; if (v > bb) bb = v; }
+    for (const p of inst.asks.keys()) { const v = +p; if (v < ba) ba = v; }
     if (isFinite(bb) && isFinite(ba) && ba > bb) return (bb + ba) / 2;
-    return S && S.cur ? S.cur.c : null;
+    return inst.S && inst.S.cur ? inst.S.cur.c : null;
   }
-  function bookSnap() {
-    if (!feed.bids.size && !feed.asks.size) return null;
-    const mid = midPrice(); if (!mid) return null;
-    const BIN = S.BIN, cb = Math.round(mid / BIN), base = cb - 40, arr = new Float32Array(81);
+  function bookSnap(inst) {
+    if (!inst.S || (!inst.bids.size && !inst.asks.size)) return null;
+    const mid = midOf(inst); if (!mid) return null;
+    const BIN = inst.S.BIN, cb = Math.round(mid / BIN), base = cb - 40, arr = new Float32Array(81);
     const add = map => { for (const [p, q] of map) { const j = Math.round(+p / BIN) - base; if (j >= 0 && j < 81) arr[j] += q; } };
-    add(feed.bids); add(feed.asks);
+    add(inst.bids); add(inst.asks);
     const nz = Array.from(arr).filter(v => v > 0).sort((a, b) => a - b);
     return { base, arr, med: nz.length ? nz[nz.length >> 1] : 1 };
   }
-
-  function connectTrades() {
-    const old = feed.tradeWs; feed.tradeWs = null; try { old && old.close(); } catch { }
-    const ws = new WebSocket(WS_MARKET + `${sym}@aggTrade`); feed.tradeWs = ws;
-    ws.onopen = () => { feed.tradeOk = true; };
-    ws.onmessage = m => { if (feed.tradeWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } d = d.data || d; if (d.e === 'aggTrade') onTrade(d); };
-    ws.onclose = () => { if (feed.tradeWs === ws) { feed.tradeOk = false; setTimeout(connectTrades, 3000); } };
+  function binConnectTrades(inst) {
+    const old = inst.tradeWs; inst.tradeWs = null; try { old && old.close(); } catch { }
+    if (!cfg.enabled[inst.def.id]) return;
+    const ws = new WebSocket(WS_MARKET + `${inst.def.sym.toLowerCase()}@aggTrade`); inst.tradeWs = ws;
+    ws.onopen = () => { inst.tradeOk = true; };
+    ws.onmessage = m => {
+      if (inst.tradeWs !== ws) return; let d; try { d = JSON.parse(m.data); } catch { return; } d = d.data || d;
+      if (d.e !== 'aggTrade') return;
+      inst.clockOff = d.E - Date.now(); inst.lastTick = Date.now();
+      if (!inst.warm) { inst.pend.push(d); if (inst.pend.length > 20000) inst.pend.shift(); return; }
+      ingest(inst, +d.p, +d.q, d.m, d.T);
+    };
+    ws.onclose = () => { if (inst.tradeWs === ws) { inst.tradeOk = false; setTimeout(() => binConnectTrades(inst), 3000); } };
     ws.onerror = () => { try { ws.close(); } catch { } };
   }
-  function onTrade(d) {
-    feed.clockOff = d.E - Date.now(); feed.lastTrade = Date.now();
-    if (!feed.warm) { feed.pend.push(d); if (feed.pend.length > 20000) feed.pend.shift(); return; }
-    if (live) ingest(+d.p, +d.q, d.m, d.T);
+  async function binFetchKlines(sym, startMs, endMs, limit) {
+    const q = startMs ? `&startTime=${Math.floor(startMs)}` : '';
+    const r = await fetch(`${REST}/fapi/v1/klines?symbol=${sym}&interval=1m&limit=${limit || 1000}${q}`);
+    if (!r.ok) throw new Error('Binance answered HTTP ' + r.status);
+    return (await r.json()).map(k => k.map(Number)).filter(v => !endMs || v[0] < endMs).map(v => kBar(v[0], v[1], v[2], v[3], v[4], v[5], v[9]));
   }
-  function newBar(t, p) { S.cur = { t, o: p, h: p, l: p, c: p, v: 0, bv: 0, sv: 0, pv: 0, p2v: 0, fp: new Map(), book: null }; }
-  function closeCurrent() {
-    const bar = S.cur; bar.book = bookSnap() || S.liveBook;
-    const before = S.trades.length;
-    AF.closeBar(S, bar);
-    if (S.trades.length > before) { const tr = S.trades[S.trades.length - 1]; if (tr.k >= S.liveFrom && !openSignal()) addSignal(tr); }
-    const o = openSignal(); if (o) { o.lastSeen = bar.t + 60000; saveLedger(); }
-    newBar(bar.t + 60000, bar.c);
-    panelDirty = journalDirty = dirty = true;
+  async function binStart(inst) {
+    inst.starting = true; inst.warm = false; inst.pend = [];
+    binConnectTrades(inst); binConnectDepth(inst);
+    let bars = [];
+    try { bars = await binFetchKlines(inst.def.sym); }
+    catch { inst.note = 'Price history could not load, so this market builds from live trades only. Signals start after about two hours.'; }
+    seedStore(inst, bars, Date.now() + inst.clockOff);
+    inst.warm = true; inst.starting = false;
+    const pend = inst.pend.sort((a, b) => a.T - b.T); inst.pend = [];
+    for (const d of pend) if (d.T >= inst.S.cur.t) ingest(inst, +d.p, +d.q, d.m, d.T);
+    inst.S.liveBook = bookSnap(inst);
+    if (inst === cur) selectMarket(inst.def.id, true);
   }
-  function rollTo(t) { let n = 0; while (S.cur && t >= S.cur.t + 60000 && n++ < 600) closeCurrent(); }
-  function ingest(p, q, sellerAgg, t) {
-    rollTo(t);
-    const b = S.cur; if (!b || t < b.t) return;
-    b.c = p; if (p > b.h) b.h = p; if (p < b.l) b.l = p;
-    const bv = sellerAgg ? 0 : q, sv = sellerAgg ? q : 0;
-    b.v += q; b.bv += bv; b.sv += sv; b.pv += p * q; b.p2v += p * p * q;
-    const bin = Math.round(p / S.BIN), f = b.fp.get(bin); if (f) { f[0] += bv; f[1] += sv; } else b.fp.set(bin, [bv, sv]);
-    const o = openSignal(); if (o) stepSignal(o, p, p, p, t);
-    dirty = true;
+  function binStop(inst) {
+    const a = inst.depthWs, b = inst.tradeWs; inst.depthWs = inst.tradeWs = null; inst.depthOk = inst.tradeOk = false;
+    try { a && a.close(); } catch { } try { b && b.close(); } catch { }
   }
 
-  async function warmup() {
-    live = true; feed.warm = false;
-    S = AF.createStore({ mode: 'live', symbol: 'XAUUSD', bin: 0.5, pip: 0.1, dec: 2, interval: 60000, htfMult: 15 });
-    readParams(S.params);
-    let rows = [];
-    try {
-      const r = await fetch(`${REST}/fapi/v1/klines?symbol=${SYMBOL}&interval=1m&limit=1000`);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      rows = await r.json();
-    } catch { feed.note = 'Price history could not load, so the engine is building from live trades only. Signals start after about two hours.'; }
-    const now = Date.now() + feed.clockOff;
-    let curK = null;
-    for (const k of rows) {
-      const [t, o, h, l, c, v, ct, , , tbv] = k.map(Number);
-      if (ct >= now) { curK = { t, o, h, l, c, v, tbv }; continue; }
-      const tp = (h + l + c) / 3, rg = h - l;
-      AF.closeBar(S, { t, o, h, l, c, v, bv: tbv, sv: v - tbv, pv: tp * v, p2v: v * (tp * tp + rg * rg / 12), fp: null, book: null });
-    }
-    S.liveFrom = S.bars.length;
-    clearHistoryActive(S);
-    if (curK) {
-      newBar(curK.t, curK.o);
-      const b = S.cur, tp = (curK.h + curK.l + curK.c) / 3, rg = curK.h - curK.l;
-      Object.assign(b, { h: curK.h, l: curK.l, c: curK.c, v: curK.v, bv: curK.tbv, sv: curK.v - curK.tbv, pv: tp * curK.v, p2v: curK.v * (tp * tp + rg * rg / 12) });
-      const lo = Math.round(curK.l / S.BIN), hi = Math.round(curK.h / S.BIN), n = hi - lo + 1, loc = rg > 0 ? (curK.c - curK.l) / rg : 0.5;
-      for (let x = lo; x <= hi; x++) b.fp.set(x, [curK.v / n * loc, curK.v / n * (1 - loc)]);
-    } else {
-      const p0 = feed.pend.length ? +feed.pend[0].p : (S.bars.length ? S.bars[S.bars.length - 1].c : 0);
-      newBar(Math.floor(now / 60000) * 60000, p0);
-    }
-    // settle any signal left open from an earlier session against the bars missed while away
-    const o = openSignal();
-    if (o) { for (const b of S.bars) if (b.t + 60000 > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + 60000); if (o.result === null) { o.lastSeen = now; saveLedger(); } }
-    feed.warm = true;
-    const pend = feed.pend.sort((a, b) => a.T - b.T); feed.pend = [];
-    for (const d of pend) if (d.T >= S.cur.t) ingest(+d.p, +d.q, d.m, d.T);
-    S.liveBook = bookSnap();
-    view.follow = true; custom = null;
-    afterRebuild();
+  // ---------------- Deriv (forex and synthetic prices, no volume)
+  const DERIV_URLS = ['wss://api.derivws.com/trading/v1/options/ws/public', 'wss://ws.derivws.com/websockets/v3?app_id=1089'];
+  const deriv = { ws: null, idx: 0, ok: false, req: 1, pending: new Map(), queue: [], ping: null };
+  function derivConnect() {
+    const ws = new WebSocket(DERIV_URLS[deriv.idx]); deriv.ws = ws; let opened = false;
+    ws.onopen = () => {
+      opened = true; deriv.ok = true;
+      for (const s of deriv.queue.splice(0)) ws.send(s);
+      for (const inst of insts) if (inst.def.src === 'deriv' && cfg.enabled[inst.def.id] && inst.warm) derivSend({ ticks: inst.def.sym, subscribe: 1 }).catch(() => { });
+      clearInterval(deriv.ping); deriv.ping = setInterval(() => { if (deriv.ok) try { ws.send('{"ping":1}'); } catch { } }, 25000);
+    };
+    ws.onmessage = m => {
+      let d; try { d = JSON.parse(m.data); } catch { return; }
+      if (d.msg_type === 'tick' && d.tick) {
+        const inst = insts.find(i => i.def.src === 'deriv' && i.def.sym === d.tick.symbol);
+        if (inst && inst.warm && cfg.enabled[inst.def.id]) {
+          const p = +d.tick.quote, t = d.tick.epoch * 1000;
+          inst.clockOff = t - Date.now();
+          const up = inst.lastPx === null ? 0 : Math.sign(p - inst.lastPx);
+          ingest(inst, p, 1, up < 0 ? true : up > 0 ? false : Math.random() < 0.5, t);
+        }
+      }
+      if (d.req_id && deriv.pending.has(d.req_id)) { const p = deriv.pending.get(d.req_id); deriv.pending.delete(d.req_id); d.error ? p.rej(new Error(d.error.message || 'Deriv error')) : p.res(d); }
+    };
+    ws.onclose = () => { deriv.ok = false; if (!opened) deriv.idx = (deriv.idx + 1) % DERIV_URLS.length; if (deriv.ws === ws) setTimeout(derivConnect, 3000); };
+    ws.onerror = () => { try { ws.close(); } catch { } };
   }
+  function derivSend(obj) {
+    return new Promise((res, rej) => {
+      const id = deriv.req++; obj.req_id = id; deriv.pending.set(id, { res, rej });
+      const s = JSON.stringify(obj);
+      if (deriv.ok) { try { deriv.ws.send(s); } catch { deriv.queue.push(s); } } else deriv.queue.push(s);
+      setTimeout(() => { if (deriv.pending.has(id)) { deriv.pending.delete(id); rej(new Error('Deriv did not answer in time')); } }, 30000);
+    });
+  }
+  async function derivCandles(sym, startS, endS) {
+    const req = { ticks_history: sym, style: 'candles', granularity: 60, end: endS ? String(endS) : 'latest', adjust_start_time: 1, count: 5000 };
+    if (startS) req.start = startS; else req.count = 1000;
+    const d = await derivSend(req);
+    return { pipSize: d.pip_size, bars: (d.candles || []).map(c => kBar(+c.epoch * 1000, +c.open, +c.high, +c.low, +c.close, 1, 0.5)) };
+  }
+  async function derivStart(inst) {
+    inst.starting = true; inst.warm = false; inst.lastPx = null;
+    let bars = [], pipSize = null;
+    try { const r = await derivCandles(inst.def.sym); bars = r.bars; pipSize = r.pipSize; }
+    catch (e) { inst.note = `Deriv history did not load (${e.message}).`; }
+    const d = inst.def;
+    if (pipSize != null && !d.pip) { d.dec = Math.max(0, Math.round(pipSize)); d.pip = Math.pow(10, -d.dec); }
+    if (!d.pip) { d.pip = 0.01; d.dec = 2; }
+    if (!d.dec) d.dec = 2;
+    if (d.rng) inst.note = 'Synthetic indices are produced by Deriv\'s random number generator. No real buyers, sellers or order book stand behind them, so order flow does not exist here and VWAP and the profile are time-based. Check the History test before trusting any signal.';
+    else inst.note = 'Forex has no central order book and Deriv publishes no volume, so this market uses price structure, time-based VWAP and a TPO profile. No heatmap.';
+    seedStore(inst, bars, Date.now() + inst.clockOff);
+    inst.warm = true; inst.starting = false;
+    derivSend({ ticks: d.sym, subscribe: 1 }).catch(e => { inst.note = `Live prices for ${d.label} are unavailable: ${e.message}`; });
+    if (inst === cur) selectMarket(d.id, true);
+  }
+  function derivStop(inst) { if (deriv.ok) derivSend({ forget_all: 'ticks' }).then(() => { for (const i of insts) if (i.def.src === 'deriv' && cfg.enabled[i.def.id] && i.warm) derivSend({ ticks: i.def.sym, subscribe: 1 }).catch(() => { }); }).catch(() => { }); inst.warm = false; }
 
+  function startInst(inst) { if (inst.starting) return; return inst.def.src === 'binance' ? binStart(inst) : derivStart(inst); }
+  function stopInst(inst) { if (inst.def.src === 'binance') binStop(inst); else derivStop(inst); inst.warm = false; }
+
+  // timer: close quiet minutes and refresh books
   setInterval(() => {
-    if (!feed.warm || !live || !S.cur) return;
-    const now = Date.now() + feed.clockOff;
-    if (now >= S.cur.t + 61500) rollTo(now);
-    const bk = bookSnap(); if (bk) { S.liveBook = bk; if (layers.heat) dirty = true; }
+    for (const inst of insts) {
+      if (!inst.warm || !cfg.enabled[inst.def.id] || !inst.S || !inst.S.cur) continue;
+      const now = Date.now() + inst.clockOff;
+      if (now >= inst.S.cur.t + 61500) rollTo(inst, now);
+      if (inst.def.src === 'binance') { const bk = bookSnap(inst); if (bk) { inst.S.liveBook = bk; if (inst === cur && layers.heat) dirty = true; } }
+    }
   }, 250);
 
-  function feedState() {
-    if (!live) return { cls: '', text: 'Backtest' };
-    const quiet = feed.lastTrade && Date.now() - feed.lastTrade > 5 * 60000;
-    if (!feed.tradeOk && !feed.depthOk) return { cls: 'bad', text: 'Reconnecting…' };
-    if (!feed.warm) return { cls: 'warn', text: 'Loading history…' };
-    if (quiet) return { cls: 'warn', text: 'Market quiet or closed' };
-    if (!feed.synced) return { cls: 'warn', text: 'Syncing order book…' };
-    return { cls: 'ok', text: feed.mode === 'diff' ? 'Live · full book' : 'Live · top 20 levels' };
+  function stateOf(inst) {
+    if (!cfg.enabled[inst.def.id]) return { cls: '', text: 'Off' };
+    if (!inst.warm) return { cls: 'warn', text: 'Loading…' };
+    const quiet = inst.lastTick && Date.now() - inst.lastTick > 5 * 60000;
+    if (inst.def.src === 'binance') {
+      if (!inst.tradeOk && !inst.depthOk) return { cls: 'bad', text: 'Reconnecting…' };
+      if (quiet) return { cls: 'warn', text: 'Market quiet or closed' };
+      if (!inst.synced) return { cls: 'warn', text: 'Syncing order book…' };
+      return { cls: 'ok', text: inst.mode === 'diff' ? 'Live · full book' : 'Live · top 20 levels' };
+    }
+    if (!deriv.ok) return { cls: 'bad', text: 'Reconnecting…' };
+    if (!inst.lastTick || quiet) return { cls: 'warn', text: 'Market quiet or closed' };
+    return { cls: 'ok', text: 'Live · prices only' };
   }
   function renderFeed() {
-    const s = feedState(), el = $('#src');
-    el.textContent = s.text; el.className = 'chip feed ' + s.cls;
-    const n = $('#feedNote'); n.hidden = !feed.note || !live; n.textContent = feed.note;
+    const el = $('#src');
+    if (!live) { el.textContent = 'Backtest'; el.className = 'chip feed'; $('#feedNote').hidden = true; }
+    else { const s = stateOf(cur); el.textContent = s.text; el.className = 'chip feed ' + s.cls; const n = $('#feedNote'); n.hidden = !cur.note; n.textContent = cur.note; n.className = 'feednote' + (cur.def.rng ? ' rng' : ''); }
+    renderWatch();
+  }
+  function renderWatch() {
+    const on = insts.filter(i => cfg.enabled[i.def.id]);
+    const html = on.map(i => {
+      const s = stateOf(i), o = openSignalFor(i.def.id), px = i.S && i.S.cur ? i.S.cur.c.toFixed(i.def.dec || 2) : '–';
+      const sig = o ? `<b class="${o.dir > 0 ? 'up' : 'down'}">${o.dir > 0 ? 'BUY' : 'SELL'}</b>` : '';
+      return `<button type="button" class="wchip${i === cur && live ? ' sel' : ''}" data-mk="${i.def.id}" aria-pressed="${i === cur && live}"><span class="dot ${s.cls}"></span><span class="wl">${esc(i.def.label)}</span><span class="num wp">${px}</span>${sig}</button>`;
+    }).join('');
+    if (html === renderWatch.last) return; renderWatch.last = html;
+    $('#watch').innerHTML = html;
+    document.querySelectorAll('.wchip').forEach(b => b.onclick = () => { if (!live) backToLive(); selectMarket(b.dataset.mk); });
+  }
+
+  function selectMarket(id, quiet) {
+    const inst = byId[id]; if (!inst) return;
+    cur = inst; cfg.sel = id; saveCfg(); live = true;
+    $('#sym').textContent = inst.def.label;
+    $('#domCard').hidden = inst.def.src !== 'binance';
+    const heatBtn = document.querySelector('[data-layer="heat"]');
+    layers.heat = inst.def.src === 'binance'; heatBtn.setAttribute('aria-pressed', layers.heat);
+    $('#calLabel').textContent = `Your MT5 ${inst.def.label} price now`;
+    $('#costLabel').textContent = `Costs per trade for ${inst.def.label} (${unitWord(inst.def)})`;
+    $('#cost').value = costPips(inst); showOff();
+    $('#histTitle').textContent = inst.def.label;
+    if (inst.S) { S = inst.S; view.follow = true; custom = null; afterRebuild(); }
+    else { S = null; if (cfg.enabled[id] && !inst.starting && !inst.warm) startInst(inst); else if (!cfg.enabled[id]) { cfg.enabled[id] = true; saveCfg(); renderMarketList(); startInst(inst); } }
+    panelDirty = journalDirty = dirty = true;
   }
 
   // ---------------- setup panel
   $('#setupBtn').onclick = () => { const s = $('#setup'); s.hidden = !s.hidden; $('#setupBtn').setAttribute('aria-expanded', !s.hidden); };
-  $('#broker').value = cfg.broker; $('#cost').value = cfg.cost; $('#tgToken').value = cfg.tgToken; $('#tgChat').value = cfg.tgChat; $('#tgOn').checked = cfg.tgOn;
-  const showOff = () => { $('#offv').textContent = sgn(cfg.offset); };
-  showOff();
+  $('#broker').value = cfg.broker; $('#tgToken').value = cfg.tgToken; $('#tgChat').value = cfg.tgChat; $('#tgOn').checked = cfg.tgOn;
+  function showOff() { const o = cfg.offsets[cur.def.id] || 0; $('#offv').textContent = `${o >= 0 ? '+' : '−'}${Math.abs(o)}`; }
   $('#broker').onchange = e => { cfg.broker = e.target.value; saveCfg(); };
-  $('#cost').onchange = e => { const v = parseFloat(e.target.value); cfg.cost = isFinite(v) && v >= 0 ? v : 3; e.target.value = cfg.cost; saveCfg(); if (S) { S.params.costPrice = cfg.cost * 0.1; panelDirty = true; } };
+  $('#cost').onchange = e => {
+    const v = parseFloat(e.target.value); cfg.costs[cur.def.id] = isFinite(v) && v >= 0 ? v : cur.def.cost; e.target.value = cfg.costs[cur.def.id]; saveCfg();
+    if (cur.S) { cur.S.params.costPrice = costPips(cur) * cur.S.pip; panelDirty = true; }
+  };
   $('#calib').onclick = () => {
     const v = parseFloat(String($('#mt5px').value).replace(',', '.'));
-    const ref = midPrice() || (S.cur && S.cur.c);
+    const ref = cur.def.src === 'binance' ? midOf(cur) : (cur.S && cur.S.cur && cur.S.cur.c);
     if (!isFinite(v) || !ref) { $('#calMsg').textContent = 'Type the price shown on your MT5 chart first.'; return; }
     const off = v - ref;
-    if (Math.abs(off) > 50) { $('#calMsg').textContent = `That is ${off.toFixed(2)} away from Binance (${ref.toFixed(2)}). Check you typed the XAUUSD price.`; return; }
-    cfg.offset = Math.round(off * 100) / 100; saveCfg(); showOff();
-    $('#calMsg').textContent = `Matched: your ${cfg.broker} price is ${sgn(cfg.offset)} from Binance (${ref.toFixed(2)}).`;
+    if (Math.abs(off) > ref * 0.01) { $('#calMsg').textContent = `That is ${off.toFixed(cur.def.dec)} away from the feed (${ref.toFixed(cur.def.dec)}). Check you typed the ${cur.def.label} price.`; return; }
+    cfg.offsets[cur.def.id] = +off.toFixed(cur.def.dec); saveCfg(); showOff();
+    $('#calMsg').textContent = `Matched: your ${cfg.broker} ${cur.def.label} is ${off >= 0 ? '+' : ''}${off.toFixed(cur.def.dec)} from the feed.`;
     panelDirty = true;
   };
   $('#tgToken').onchange = e => { cfg.tgToken = e.target.value.trim(); saveCfg(); };
@@ -1656,58 +1837,76 @@ const AF = (() => {
       const j = await r.json();
       if (!j.ok) throw new Error(j.description || 'Token not accepted');
       const msg = (j.result || []).reverse().map(u => u.message || u.my_chat_member || u.channel_post).find(Boolean);
-      if (!msg) { $('#tgMsg').textContent = 'No messages yet. Open your bot in Telegram, press Start, then try again.'; return; }
+      if (!msg) { $('#tgMsg').textContent = 'No messages yet. Open your bot in Telegram, send hi, then try again. Or paste your ID from @userinfobot.'; return; }
       cfg.tgChat = String(msg.chat.id); $('#tgChat').value = cfg.tgChat; cfg.tgOn = true; $('#tgOn').checked = true; saveCfg();
       $('#tgMsg').textContent = `Found chat ${cfg.tgChat}. Alerts are on.`;
-    } catch (ex) { $('#tgMsg').textContent = `Could not read updates (${ex.message}). Check the token, or open api.telegram.org/bot<token>/getUpdates in a tab and copy the chat id.`; }
+    } catch (ex) { $('#tgMsg').textContent = `Could not read updates (${ex.message}). Paste your ID from @userinfobot instead.`; }
   };
   $('#tgTest').onclick = async () => {
     cfg.tgToken = $('#tgToken').value.trim(); cfg.tgChat = $('#tgChat').value.trim(); saveCfg();
-    const ok = await tg(`Aurum Flow test alert. Price now ${fmt(lastPrice())} on Binance, ${(lastPrice() + cfg.offset).toFixed(2)} on your ${cfg.broker} MT5.`, true);
+    const on = insts.filter(i => cfg.enabled[i.def.id] && i.S && i.S.cur).map(i => `${i.def.label} ${i.S.cur.c.toFixed(i.def.dec)}`).join(', ');
+    const ok = await tg(`Aurum Flow test alert. Scanning: ${on || 'starting up'}.`, true);
     $('#tgMsg').textContent = ok ? 'Test sent. Check Telegram.' : 'Sending failed. Check the token and chat ID.';
   };
+  function renderMarketList() {
+    const groups = [...new Set(MARKETS.map(m => m.group))];
+    $('#mkts').innerHTML = groups.map(g => `<fieldset class="mgroup"><legend>${esc(g)}</legend>${MARKETS.filter(m => m.group === g).map(m => `<label class="chk"><input type="checkbox" data-en="${m.id}"${cfg.enabled[m.id] ? ' checked' : ''}> ${esc(m.label)} <span class="muted">${esc(m.name)}</span></label>`).join('')}</fieldset>`).join('');
+    document.querySelectorAll('[data-en]').forEach(cb => cb.onchange = () => {
+      const inst = byId[cb.dataset.en]; cfg.enabled[inst.def.id] = cb.checked; saveCfg();
+      if (cb.checked) startInst(inst); else { stopInst(inst); if (inst === cur) { const nx = insts.find(i => cfg.enabled[i.def.id]); if (nx) selectMarket(nx.def.id); } }
+      renderWatch();
+    });
+  }
 
-  // ---------------- journal (live signals)
+  // ---------------- journal (live signals, all markets)
   function ledgerStats(closed) {
-    let wins = 0, losses = 0, be = 0, netR = 0, netPips = 0, gp = 0, gl = 0, peak = 0, dd = 0; const curve = [0];
+    let wins = 0, losses = 0, be = 0, netR = 0, gp = 0, gl = 0, peak = 0, dd = 0; const curve = [0];
     for (const t of closed) {
       if (t.result > 0.05) wins++; else if (t.result < -0.05) losses++; else be++;
-      netR += t.result; netPips += t.pips; if (t.result > 0) gp += t.result; else gl -= t.result;
+      netR += t.result; if (t.result > 0) gp += t.result; else gl -= t.result;
       curve.push(netR); peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR);
     }
     const n = closed.length;
-    return { n, wins, losses, be, winRate: n ? wins / n : 0, netR, netPips, exp: n ? netR / n : 0, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), maxDD: dd, curve };
+    return { n, wins, losses, be, winRate: n ? wins / n : 0, netR, exp: n ? netR / n : 0, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), maxDD: dd, curve };
+  }
+  function renderJournalFilter() {
+    const sel = $('#jMarket'), v = sel.value || 'all', used = [...new Set(ledger.map(t => t.mk))];
+    sel.innerHTML = `<option value="all">All markets</option>` + MARKETS.filter(m => used.includes(m.id)).map(m => `<option value="${m.id}">${esc(m.label)}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === v) ? v : 'all';
   }
   function renderJournal() {
     if (!live) {
       const st = AF.stats(S);
       $('#notice').textContent = `Backtest on your file: ${S.bars.length} bars of ${S.tfLabel} data. The order-book factor is excluded and delta is estimated. Past results do not predict future results.`;
-      return renderTable(st, S.trades.slice().reverse().map(t => ({ ...t, open: t.result === null, rNow: t.result === null ? AF.liveR(S, lastPrice()) : t.result })));
+      return renderTable({ ...st }, S.trades.slice().reverse().map(t => ({ ...t, label: S.symbol, dec: S.dec, open: t.result === null, rNow: t.result === null ? AF.liveR(S, lastPrice()) : t.result, unitsNow: t.pips })));
     }
-    const closed = ledger.filter(x => x.result !== null), st = ledgerStats(closed);
-    const since = ledger.length ? new Date(ledger[0].t).toLocaleDateString([], { dateStyle: 'medium' }) : null;
-    const bt = S.trades.filter(t => t.k < S.liveFrom && t.result !== null), btR = bt.reduce((a, t) => a + t.result, 0);
-    $('#notice').textContent = `Live forward test on Binance XAUUSDT order flow${since ? `, recorded on this device since ${since}` : ''}. Each result subtracts ${cfg.cost} pips for spread and costs. ` +
-      `For context, on the last ${S.liveFrom} minutes of history the engine would have taken ${bt.length} signal${bt.length === 1 ? '' : 's'} (${btR >= 0 ? '+' : ''}${btR.toFixed(1)}R before costs).`;
-    renderTable(st, ledger.slice().reverse().map(t => ({ ...t, open: t.result === null, rNow: t.result === null ? signalR(t, lastPrice()) : t.result })));
+    renderJournalFilter();
+    const f = $('#jMarket').value, rows = ledger.filter(t => f === 'all' || t.mk === f), closed = rows.filter(x => x.result !== null), st = ledgerStats(closed);
+    const since = rows.length ? new Date(rows[0].t).toLocaleDateString([], { dateStyle: 'medium' }) : null;
+    $('#notice').textContent = `Live forward test${f === 'all' ? ' across all markets you scan' : ` on ${byId[f] ? byId[f].def.label : f}`}${since ? `, recorded on this device since ${since}` : ''}. Every result subtracts that market's costs. Net R adds up across markets; pips do not, so they are shown per signal only.`;
+    renderTable(st, rows.slice().reverse().map(t => {
+      const inst = byId[t.mk], px = inst && inst.S && inst.S.cur ? inst.S.cur.c : t.entry;
+      return { ...t, open: t.result === null, rNow: t.result === null ? signalR(t, px) : t.result, unitsNow: t.pips };
+    }));
   }
   function renderTable(st, rows) {
     const tiles = [
       ['Closed signals', st.n], ['Win rate', st.n ? Math.round(st.winRate * 100) + '%' : '–'],
       ['Expectancy', st.n ? `${st.exp >= 0 ? '+' : ''}${st.exp.toFixed(2)}R` : '–'],
       ['Net result', `<span class="${st.netR >= 0 ? 'up' : 'down'}">${st.netR >= 0 ? '+' : ''}${st.netR.toFixed(1)}R</span>`],
-      ['Net pips', `<span class="${st.netPips >= 0 ? 'up' : 'down'}">${st.netPips >= 0 ? '+' : ''}${Math.round(st.netPips)}</span>`],
       ['Profit factor', st.pf === Infinity ? '∞' : st.pf.toFixed(2)], ['Max drawdown', `${st.maxDD.toFixed(1)}R`],
       ['W / BE / L', `${st.wins} / ${st.be} / ${st.losses}`]
     ];
     $('#stats').innerHTML = tiles.map(([a, b]) => `<div class="stat"><span>${a}</span><b>${b}</b></div>`).join('');
-    $('#tbody').innerHTML = rows.slice(0, 300).map((t, i) => `<tr class="${t.open ? 'open' : ''}"><td class="num">${rows.length - i}</td><td class="num">${tfmt(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td>${esc(t.setup)}</td><td class="num">${t.score}</td><td class="num">${fmt(t.entry)}</td><td class="num">${fmt(t.sl0)}</td><td class="num">${fmt(t.tp1)}</td><td class="num">${fmt(t.tp2)}</td><td class="num ${t.rNow >= 0 ? 'up' : 'down'}">${t.rNow >= 0 ? '+' : ''}${t.rNow.toFixed(2)}R</td><td class="num">${t.open ? '–' : Math.round(t.pips)}</td><td>${esc(t.status)}</td></tr>`).join('')
-      || `<tr><td colspan="12" class="muted">No live signals yet. The engine waits for an edge, a trigger and confirming order flow. Leave the page open; signals are recorded here and sent to Telegram.</td></tr>`;
+    const fx = (t, x) => x.toFixed(t.dec || 2);
+    $('#tbody').innerHTML = rows.slice(0, 400).map((t, i) => `<tr class="${t.open ? 'open' : ''}"><td class="num">${rows.length - i}</td><td>${esc(t.label || '')}</td><td class="num">${tfmt(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td>${esc(t.setup)}</td><td class="num">${t.score}</td><td class="num">${fx(t, t.entry)}</td><td class="num">${fx(t, t.sl0)}</td><td class="num">${fx(t, t.tp1)}</td><td class="num">${fx(t, t.tp2)}</td><td class="num ${t.rNow >= 0 ? 'up' : 'down'}">${t.rNow >= 0 ? '+' : ''}${t.rNow.toFixed(2)}R</td><td class="num">${t.open || t.unitsNow == null ? '–' : Math.round(t.unitsNow)}</td><td>${esc(t.status)}</td></tr>`).join('')
+      || `<tr><td colspan="13" class="muted">No live signals yet. The engine waits for an edge, a trigger and confirming flow. Leave the page open; signals are recorded here and sent to Telegram.</td></tr>`;
     drawEquity(st.curve);
   }
+  $('#jMarket').onchange = () => { journalDirty = true; };
   $('#csvOut').onclick = () => {
-    const head = 'time_utc,side,setup,score,entry,stop,tp1,tp2,mt5_offset,status,result_R,pips_after_costs,exit_time_utc\n';
-    const body = ledger.map(t => [new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.setup, t.score, t.entry, t.sl0, t.tp1, t.tp2, t.offset, t.status,
+    const head = 'market,time_utc,side,setup,score,entry,stop,tp1,tp2,mt5_offset,status,result_R,pips_or_points_after_costs,exit_time_utc\n';
+    const body = ledger.map(t => [t.label, new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.setup, t.score, t.entry, t.sl0, t.tp1, t.tp2, t.offset, t.status,
       t.result === null ? '' : t.result.toFixed(3), t.pips === null ? '' : Math.round(t.pips), t.exitT ? new Date(t.exitT).toISOString() : ''].join(',')).join('\n');
     saveFile(new Blob([head + body], { type: 'text/csv' }), `aurum-journal-${new Date().toISOString().slice(0, 10)}.csv`);
   };
@@ -1723,114 +1922,117 @@ const AF = (() => {
     if (line) lines.push(line); return lines;
   }
   async function shareSignal() {
-    const t = openSignal(), W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
-    const x = c.getContext('2d'), F = 'Barlow, system-ui, sans-serif', FM = '"IBM Plex Mono", ui-monospace, monospace';
+    if (!S) return;
+    const t = live ? openSignal() : null, W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'), F = 'Barlow, system-ui, sans-serif', FM = '"IBM Plex Mono", ui-monospace, monospace', dec = S.dec;
     x.fillStyle = C.bg; x.fillRect(0, 0, W, H);
     x.fillStyle = C.gold; x.font = `700 40px ${F}`; x.fillText('Aurum Flow', 56, 84);
-    x.fillStyle = C.muted; x.font = `400 26px ${F}`; x.fillText(`XAUUSD · order flow · ${new Date().toUTCString().slice(5, 22)} UTC`, 56, 124);
+    x.fillStyle = C.muted; x.font = `400 26px ${F}`; x.fillText(`${S.symbol} · ${new Date().toUTCString().slice(5, 22)} UTC`, 56, 124);
     let y = 196;
     const side = t ? (t.dir > 0 ? 'BUY' : 'SELL') : 'STAND ASIDE', col = t ? (t.dir > 0 ? C.up : C.down) : C.muted;
     x.fillStyle = col; x.font = `700 64px ${F}`; x.fillText(side, 56, y);
-    x.fillStyle = C.fg; x.font = `500 30px ${F}`; x.fillText(t ? `${t.setup} · score ${t.score}` : 'No edge at this price', 56 + x.measureText(side).width * 0 + 0, y + 48);
+    x.fillStyle = C.fg; x.font = `500 30px ${F}`; x.fillText(t ? `${t.setup} · score ${t.score}` : 'No edge at this price', 56, y + 48);
     y += 84;
-    x.drawImage(cv, 0, 0, cv.width, cv.height, 40, y, W - 80, Math.round((W - 80) * cv.height / cv.width));
-    y += Math.round((W - 80) * cv.height / cv.width) + 40;
+    const ch = Math.round((W - 80) * cv.height / cv.width);
+    x.drawImage(cv, 0, 0, cv.width, cv.height, 40, y, W - 80, ch); y += ch + 40;
     if (t) {
       const cells = [['Entry', t.entry], ['Stop', t.sl0], ['TP1', t.tp1], ['TP2', t.tp2]], cw = (W - 112) / 4;
       cells.forEach(([k, v], i) => {
         const cx = 56 + i * cw;
         x.fillStyle = C.muted; x.font = `600 22px ${F}`; x.fillText(k.toUpperCase(), cx, y);
-        x.fillStyle = i === 1 ? C.down : i > 1 ? C.up : C.fg; x.font = `500 36px ${FM}`; x.fillText(v.toFixed(2), cx, y + 44);
-        x.fillStyle = C.muted; x.font = `400 22px ${FM}`; x.fillText(`MT5 ${m5(t, v)}`, cx, y + 76);
+        x.fillStyle = i === 1 ? C.down : i > 1 ? C.up : C.fg; x.font = `500 34px ${FM}`; x.fillText(v.toFixed(dec), cx, y + 44);
+        if (t.offset) { x.fillStyle = C.muted; x.font = `400 22px ${FM}`; x.fillText(`MT5 ${m5(t, v)}`, cx, y + 76); }
       });
       y += 124;
-      x.fillStyle = C.muted; x.font = `400 24px ${F}`; x.fillText(`Risk ${Math.round(t.risk / 0.1)} pips · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R · MT5 offset ${sgn(t.offset)} (${t.broker})`, 56, y); y += 46;
+      x.fillStyle = C.muted; x.font = `400 24px ${F}`; x.fillText(`Risk ${Math.round(t.risk / t.pip)} ${unitWord(cur.def)} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R`, 56, y); y += 46;
     }
     x.fillStyle = '#c9d1df'; x.font = `400 27px ${F}`;
-    const e = S.lastEval, txt = t ? t.narrative : (e ? `Value area ${fmt(e.prof.val)} to ${fmt(e.prof.vah)}, POC ${fmt(e.prof.poc)}, VWAP ${fmt(e.vw)}. Long case: a sweep below ${fmt(e.prof.val)} that closes back inside with buyers absorbing. Short case: a failed push above ${fmt(e.prof.vah)} that closes back inside with sellers absorbing. Target the POC either way.` : '');
+    const e = S.lastEval, f = v => v.toFixed(dec);
+    const txt = t ? t.narrative : (e ? `Value area ${f(e.prof.val)} to ${f(e.prof.vah)}, POC ${f(e.prof.poc)}, VWAP ${f(e.vw)}. Long case: a sweep below ${f(e.prof.val)} that closes back inside. Short case: a failed push above ${f(e.prof.vah)} that closes back inside. Target the POC either way.` : '');
     for (const ln of wrap(x, txt, W - 112).slice(0, Math.max(2, Math.floor((H - 90 - y) / 38)))) { x.fillText(ln, 56, y); y += 38; }
     x.fillStyle = C.faint; x.font = `400 22px ${F}`; x.fillText('Forward-test signal. Not financial advice.', 56, H - 48);
     const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    const file = new File([blob], `aurum-${side.toLowerCase().replace(' ', '-')}-${Date.now()}.png`, { type: 'image/png' });
-    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: t ? sigText('open', t) : 'Aurum Flow: stand aside' }); return; } } catch (ex) { if (ex && ex.name === 'AbortError') return; }
+    const file = new File([blob], `aurum-${S.symbol.toLowerCase().replace(/\s+/g, '-')}-${side.toLowerCase().replace(' ', '-')}-${Date.now()}.png`, { type: 'image/png' });
+    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text: t ? sigText('open', t) : `Aurum Flow ${S.symbol}: stand aside` }); return; } } catch (ex) { if (ex && ex.name === 'AbortError') return; }
     saveFile(blob, file.name);
   }
   $('#share').onclick = () => shareSignal();
 
-
-  // ---------------- history test: Binance 1m klines with real taker volume, no order book
-  async function fetchKlines(days, say) {
-    const end = Date.now() + feed.clockOff, start = end - days * 86400e3, out = [];
-    let t = start;
-    while (t < end - 60000) {
-      const r = await fetch(`${REST}/fapi/v1/klines?symbol=${SYMBOL}&interval=1m&limit=1500&startTime=${Math.floor(t)}`);
-      if (!r.ok) throw new Error('Binance answered HTTP ' + r.status);
-      const rows = await r.json(); if (!rows.length) break;
-      for (const k of rows) { const v = k.map(Number); if (v[6] < end) out.push(v); }
-      const next = +rows[rows.length - 1][0] + 60000; if (next <= t) break; t = next;
-      say(`Downloading history… ${Math.min(100, Math.round((t - start) / (end - start) * 100))}%`);
-      await new Promise(res => setTimeout(res, 120));
+  // ---------------- history test for the selected market
+  async function historyBars(inst, days, say) {
+    const end = Date.now() + inst.clockOff, start = end - days * 86400e3, out = [];
+    if (inst.def.src === 'binance') {
+      let t = start;
+      while (t < end - 60000) {
+        const rows = await binFetchKlines(inst.def.sym, t, end, 1500); if (!rows.length) break;
+        out.push(...rows); const next = rows[rows.length - 1].t + 60000; if (next <= t) break; t = next;
+        say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((t - start) / (end - start) * 100))}%`);
+        await new Promise(r => setTimeout(r, 120));
+      }
+    } else {
+      let s = Math.floor(start / 1000); const e = Math.floor(end / 1000);
+      while (s < e - 60) {
+        const to = Math.min(e, s + 3 * 86400);
+        const { bars } = await derivCandles(inst.def.sym, s, to);
+        for (const b of bars) if (!out.length || b.t > out[out.length - 1].t) out.push(b);
+        s = to;
+        say(`Downloading ${inst.def.label} history… ${Math.min(100, Math.round((s * 1000 - start) / (end - start) * 100))}%`);
+        await new Promise(r => setTimeout(r, 150));
+      }
     }
-    return out;
+    return out.filter(b => b.t + 60000 <= end);
   }
-  function klineBar(v) { const [t, o, h, l, c, vol, , , , tbv] = v, tp = (h + l + c) / 3, rg = h - l; return { t, o, h, l, c, v: vol, bv: tbv, sv: vol - tbv, pv: tp * vol, p2v: vol * (tp * tp + rg * rg / 12), fp: null, book: null }; }
   function summarize(cl, days) {
-    let wins = 0, netR = 0, gp = 0, gl = 0, peak = 0, dd = 0;
-    const L = { n: 0, r: 0 }, Sh = { n: 0, r: 0 };
-    for (const t of cl) {
-      if (t.net > 0.05) wins++; netR += t.net; if (t.net > 0) gp += t.net; else gl -= t.net;
-      peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR);
-      const g = t.dir > 0 ? L : Sh; g.n++; g.r += t.net;
-    }
+    let wins = 0, netR = 0, gp = 0, gl = 0, peak = 0, dd = 0; const L = { n: 0, r: 0 }, Sh = { n: 0, r: 0 };
+    for (const t of cl) { if (t.net > 0.05) wins++; netR += t.net; if (t.net > 0) gp += t.net; else gl -= t.net; peak = Math.max(peak, netR); dd = Math.max(dd, peak - netR); const g = t.dir > 0 ? L : Sh; g.n++; g.r += t.net; }
     const n = cl.length;
     return { n, perDay: n / days, wr: n ? wins / n : 0, exp: n ? netR / n : 0, netR, pf: gl > 0 ? gp / gl : (gp > 0 ? Infinity : 0), dd, L, Sh };
   }
-  async function runVariant(bars, params, say, label, days) {
-    const T = AF.createStore({ mode: 'live', symbol: 'XAUUSD', bin: 0.5, pip: 0.1, dec: 2, interval: 60000, htfMult: 15 });
+  async function runVariant(inst, bars, params, say, label, days) {
+    const T = storeFor(inst); T.BIN = inst.S ? inst.S.BIN : T.BIN; T.pip = inst.S ? inst.S.pip : T.pip; T.dec = inst.S ? inst.S.dec : T.dec;
     Object.assign(T.params, params);
     for (let i = 0; i < bars.length; i++) {
       AF.closeBar(T, bars[i]);
       if (i % 2500 === 0) { say(`Testing ${label}… ${Math.round(i / bars.length * 100)}%`); await new Promise(r => setTimeout(r)); }
     }
-    const cl = T.trades.filter(t => t.result !== null).map(t => ({ dir: t.dir, net: t.result - params.costPrice / t.risk }));
-    return summarize(cl, days);
+    return summarize(T.trades.filter(t => t.result !== null).map(t => ({ dir: t.dir, net: t.result - params.costPrice / t.risk })), days);
   }
   let histBusy = false;
   $('#histRun').onclick = async () => {
-    if (histBusy) return; histBusy = true; $('#histRun').disabled = true;
-    const say = m => { $('#histMsg').textContent = m; };
-    const days = +$('#histDays').value;
+    if (histBusy || !live || !cur.S) return; histBusy = true; $('#histRun').disabled = true;
+    const inst = cur, say = m => { $('#histMsg').textContent = m; }, days = +$('#histDays').value;
     try {
-      const raw = await fetchKlines(days, say);
-      if (raw.length < 500) throw new Error('Not enough history came back');
-      const bars = raw.map(klineBar);
-      const base = { ...S.params }; readParams(base);
+      const bars = await historyBars(inst, days, say);
+      if (bars.length < 500) throw new Error('not enough history came back');
+      const base = { ...inst.S.params }; readParams(base, inst);
+      const fw = inst.def.src === 'binance' ? 'Order flow' : 'Rejection candle';
       const variants = [
-        ['Order flow + 15m filter', { trigger: 'flow', useHTF: true }],
-        ['Order flow, no 15m filter', { trigger: 'flow', useHTF: false }],
+        [`${fw} + 15m filter`, { trigger: 'flow', useHTF: true }],
+        [`${fw}, no 15m filter`, { trigger: 'flow', useHTF: false }],
         ['Fractal sweep + 15m filter', { trigger: 'fractal', useHTF: true }],
         ['Fractal sweep, no 15m filter', { trigger: 'fractal', useHTF: false }]
       ];
       const res = [];
-      for (const [name, v] of variants) res.push([name, v, await runVariant(bars, { ...base, ...v }, say, name, days)]);
-      const cur = res.find(([, v]) => v.trigger === base.trigger && v.useHTF === base.useHTF);
-      const sgnR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
-      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === cur[2] ? 'open' : ''}"><td>${esc(name)}${s === cur[2] ? ' <span class="muted">(your settings)</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sgnR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td></tr>`).join('');
+      for (const [name, v] of variants) res.push([name, v, await runVariant(inst, bars, { ...base, ...v }, say, name, days)]);
+      const mine = res.find(([, v]) => v.trigger === base.trigger && v.useHTF === base.useHTF);
+      const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
+      $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td></tr>`).join('');
       $('#histTable').hidden = false;
-      const first = new Date(bars[0].t).toLocaleDateString([], { dateStyle: 'medium' }), last = new Date(bars[bars.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
-      say(`Tested ${bars.length.toLocaleString()} one-minute bars, ${first} to ${last}, threshold ${base.threshold}, ${cfg.cost} pips costs per trade. Results are after costs; the order-book factor is left out because Binance keeps no book history.`);
+      const d1 = new Date(bars[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(bars[bars.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
+      say(`${inst.def.label}: tested ${bars.length.toLocaleString()} one-minute bars, ${d1} to ${d2}, threshold ${base.threshold}, ${costPips(inst)} ${unitWord(inst.def)} costs per trade. Results are after costs. ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'This market has no volume or order book, so only structure, value and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
     histBusy = false; $('#histRun').disabled = false;
   };
 
-  // ---------------- controls shared with the sim build
-  $('#thr').oninput = e => { S.params.threshold = +e.target.value; $('#thrv').textContent = e.target.value; S.lastEval = reEval(); panelDirty = true; };
-  $('#lookback').onchange = e => { S.params.lookback = +e.target.value; S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
-  const keepLive = N => { N.liveFrom = S.liveFrom; N.cur = S.cur; N.liveBook = S.liveBook; clearHistoryActive(N); return N; };
-  $('#rerun').onclick = () => { S = keepLive(AF.rebuild(S)); afterRebuild(); };
-  const readParams = P => { P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.costPrice = cfg.cost * 0.1; };
-  $('#trigMode').onchange = $('#useHTF').onchange = () => { readParams(S.params); S = keepLive(AF.rebuild(S)); afterRebuild(); };
-  const reEval = () => S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
+  // ---------------- engine controls (apply to every market)
+  const readParams = (P, inst) => { inst = inst || cur; P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01)); };
+  const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
+  function rebuildAll() { for (const i of insts) if (i.S) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); } if (cur.S) S = cur.S; afterRebuild(); }
+  $('#thr').oninput = e => { $('#thrv').textContent = e.target.value; for (const i of insts) if (i.S) i.S.params.threshold = +e.target.value; if (S) S.lastEval = reEval(); panelDirty = true; };
+  $('#lookback').onchange = e => { for (const i of insts) if (i.S) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
+  $('#rerun').onclick = () => rebuildAll();
+  $('#trigMode').onchange = $('#useHTF').onchange = () => rebuildAll();
+  const reEval = () => S && S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
     $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist';
@@ -1842,7 +2044,7 @@ const AF = (() => {
     try {
       const rows = AF.parseCSV(await file.text());
       const name = file.name.replace(/\.(csv|txt|tsv)$/i, '').slice(0, 24);
-      const N = AF.csvStore(rows, name); readParams(N.params);
+      const N = AF.csvStore(rows, name); readParams(N.params); N.params.costPrice = costPips(cur) * N.pip;
       live = false; S = AF.rebuild(N);
       $('#sym').textContent = name; $('#toLive').hidden = false; $('#domCard').hidden = true; layers.heat = false;
       document.querySelector('[data-layer="heat"]').setAttribute('aria-pressed', 'false');
@@ -1851,11 +2053,8 @@ const AF = (() => {
     } catch (ex) { err.textContent = `Could not read that file. ${ex.message} Export bars as CSV with time, open, high, low, close and volume columns (MT5 and TradingView exports work).`; err.hidden = false; }
     e.target.value = '';
   };
-  $('#toLive').onclick = () => {
-    $('#toLive').hidden = true; $('#domCard').hidden = false; $('#sym').textContent = 'XAUUSD'; layers.heat = true;
-    document.querySelector('[data-layer="heat"]').setAttribute('aria-pressed', 'true');
-    warmup();
-  };
+  function backToLive() { $('#toLive').hidden = true; live = true; selectMarket(cur.def.id); }
+  $('#toLive').onclick = backToLive;
 
   // ---------------- main loop
   let lastPanel = 0, lastJournal = 0;
@@ -1867,7 +2066,7 @@ const AF = (() => {
         if (S.lastEval) { renderHeader(); renderSignal(); renderDOM(); if (panelDirty) { renderConfluence(); renderRead(); } }
         panelDirty = false; lastPanel = ts;
       }
-      if (journalDirty || (openSignal() && ts - lastJournal > 1500)) {
+      if (journalDirty || (ledger.some(x => x.result === null) && ts - lastJournal > 1500)) {
         if (!$('#pane-journal').hidden) renderJournal();
         journalDirty = false; lastJournal = ts;
       }
@@ -1877,9 +2076,12 @@ const AF = (() => {
 
   if (window.innerWidth < 640) view.n = 70;
   resize();
-  connectTrades();
-  connectDepth();
-  warmup();
+  renderMarketList();
+  $('#sym').textContent = cur.def.label;
+  if (!cfg.enabled[cur.def.id]) { cfg.enabled[cur.def.id] = true; saveCfg(); renderMarketList(); }
+  derivConnect();
+  for (const inst of insts) if (cfg.enabled[inst.def.id]) startInst(inst);
+  selectMarket(cur.def.id, true);
   requestAnimationFrame(loop);
 })();
 
