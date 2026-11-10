@@ -343,7 +343,7 @@ tr.open td{background:var(--gold-soft)}
       </section>
       <section>
         <h4>Trade management</h4>
-        <p>Stop goes beyond the swept level or the bar extreme. It is never closer than 0.8× the 1m ATR, 0.6× the 15m ATR, or 8× your trading costs, whichever is widest, so normal gold noise and spread cannot take it out. TP1 is the nearer of POC and VWAP; TP2 is the far value edge, a σ band or an untaken swing. Half is banked at TP1 and the stop moves to breakeven. Trades time out after 240 bars. If a bar touches both stop and target, the journal counts the stop.</p>
+        <p>Stop goes beyond the swept level or the bar extreme. It is never closer than 0.8× the 1m ATR, 0.6× the 15m ATR, or 8× your trading costs, whichever is widest, so normal gold noise and spread cannot take it out. TP1 is the nearer of POC and VWAP; TP2 is the far value edge, a σ band or an untaken swing. Half is banked at TP1 and the stop moves to breakeven. Each market holds one signal at a time; a new setup waits until the open one finishes. The chart draws exactly the signals in your journal. Trades time out after about four hours. If a bar touches both stop and target, the journal counts the stop.</p>
         <p>Pips on gold: 1 pip = $0.10. Losses are counted in pips too, so net pips is real.</p>
       </section>
     </div>
@@ -1190,10 +1190,11 @@ const AF = (() => {
 
     // trades
     if (layers.trades) {
-      for (let j = S.trades.length - 1; j >= 0; j--) {
-        const t = S.trades[j], ex = t.exitIdx !== null ? t.exitIdx : total() - 1 + 6;
-        if (ex < i0) break; if (t.k > i1) continue;
-        ctx.globalAlpha = (live && t.k < S.liveFrom) ? 0.35 : 1;
+      const marks = chartTrades();
+      for (let j = marks.length - 1; j >= 0; j--) {
+        const t = marks[j], ex = t.exitIdx !== null ? t.exitIdx : total() - 1 + 6;
+        if (ex < i0 || t.k > i1) continue;
+        ctx.globalAlpha = 1;
         const xa = xOf(t.k), xb = Math.min(plot.x + plot.w, xOf(ex));
         const ye = yOf(t.entry), ysl = yOf(t.sl0), yt2 = yOf(t.tp2), yt1 = yOf(t.tp1);
         ctx.fillStyle = 'rgba(51,195,160,.12)'; ctx.fillRect(xa, Math.min(ye, yt2), xb - xa, Math.abs(yt2 - ye));
@@ -1342,6 +1343,24 @@ const AF = (() => {
     return best;
   }
 
+  // live: the chart shows exactly the signals in the journal for this market, nothing the engine only considered
+  function barIndexAt(t) {
+    const B = S.bars; if (!B.length || t < B[0].t) return -1;
+    if (S.cur && t >= S.cur.t) return B.length;
+    let lo = 0, hi = B.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (B[m].t <= t) lo = m; else hi = m - 1; }
+    return lo;
+  }
+  function chartTrades() {
+    if (!live) return S.trades;
+    const out = [];
+    for (const s of ledgerFor(cur.def.id)) {
+      const k = barIndexAt(s.t); if (k < 0) continue;
+      out.push({ k, exitIdx: s.exitT ? Math.max(k, barIndexAt(s.exitT)) : null, entry: s.entry, sl0: s.sl0, tp1: s.tp1, tp2: s.tp2, dir: s.dir });
+    }
+    return out;
+  }
+
   function renderSignal() {
     const e = S.lastEval, t = live ? openSignal() : S.active, el = $('#sigCard');
     if (t) {
@@ -1355,7 +1374,8 @@ const AF = (() => {
           <div class="lv"><span>TP2</span><b class="up">${fmt(t.tp2)}</b><small>${esc(t.tp2Name)} · ${t.rr2.toFixed(1)}R</small></div>
         </div>
         ${live && t.offset ? `<p class="mt5">On your ${esc(t.broker)} MT5 (offset ${sgn(t.offset)}): entry <b>${m5(t, t.entry)}</b> · stop <b>${m5(t, t.sl)}</b> · TP1 <b>${m5(t, t.tp1)}</b> · TP2 <b>${m5(t, t.tp2)}</b></p>` : ''}
-        <p class="narr">${esc(t.narrative)}</p>`;
+        <p class="narr">${esc(t.narrative)}</p>
+        ${live && e && e.pick && e.pick.dir !== t.dir ? `<p class="mt5" style="margin-top:10px">A ${e.pick.dir > 0 ? 'long' : 'short'} setup is forming (score ${e.pick.score}). The engine keeps one signal per market, so it waits for this ${t.dir > 0 ? 'buy' : 'sell'} to finish first.</p>` : ''}`;
       return;
     }
     const p = e.prof, price = lastPrice();
@@ -1371,16 +1391,17 @@ const AF = (() => {
     else if (best.score < S.params.threshold) why = `The ${best.dir > 0 ? 'long' : 'short'} case scores ${best.score}, below your ${S.params.threshold} threshold.`;
     else if (best.rr1 < S.params.minRR) why = `Not enough room to TP1 (${best.rr1.toFixed(1)}R).`;
     else why = 'Cooling down after the last trade.';
-    const bw = walls(S.liveBook || S.bars[e.k].book, price, -1), aw = walls(S.liveBook || S.bars[e.k].book, price, 1);
     const sdOk = e.sdOk;
     const lowEdge = sdOk ? Math.max(p.val, e.vw - e.sd) : p.val, hiEdge = sdOk ? Math.min(p.vah, e.vw + e.sd) : p.vah;
+    const longLvl = Math.min(lowEdge, price), shortLvl = Math.max(hiEdge, price), bkNow = S.liveBook || S.bars[e.k].book;
+    const bw = walls(bkNow, longLvl + S.BIN * 0.5, -1), aw = walls(bkNow, shortLvl - S.BIN * 0.5, 1);
     const last = (live ? ledgerFor(cur.def.id) : S.trades).filter(x => x.result !== null).slice(-1)[0];
     el.innerHTML = `<div class="sig-head"><span class="pill flat">STAND ASIDE</span><span class="muted num">${fmt(price)}</span></div>
       <div class="sig-title">Price is ${where}.</div>
       <p class="narr" style="margin-top:8px">${esc(why)} The engine wants price at an edge, a trigger there, and order flow that confirms.</p>
       <ul class="watch">
-        <li class="l"><b>Long case</b> builds on a sweep below ${fmt(Math.min(lowEdge, price))}${bw ? `, ideally into the ${Math.round(bw.sz)}-lot bid wall at ${fmt(bw.p)}` : ''}, that closes back above. Target ${fmt(p.poc)} POC.</li>
-        <li class="s"><b>Short case</b> builds on a failed push above ${fmt(Math.max(hiEdge, price))}${aw ? `, ideally into the ${Math.round(aw.sz)}-lot ask wall at ${fmt(aw.p)}` : ''}, that closes back below. Target ${fmt(p.poc)} POC.</li>
+        <li class="l"><b>Long case</b> builds on a sweep below ${fmt(longLvl)}${bw ? `, ideally into the ${Math.round(bw.sz)}-lot bid wall at ${fmt(bw.p)}` : ''}, that closes back above. Target ${fmt(p.poc)} POC.</li>
+        <li class="s"><b>Short case</b> builds on a failed push above ${fmt(shortLvl)}${aw ? `, ideally into the ${Math.round(aw.sz)}-lot ask wall at ${fmt(aw.p)}` : ''}, that closes back below. Target ${fmt(p.poc)} POC.</li>
       </ul>
       ${last ? `<p class="muted" style="font-size:12px;margin:10px 0 0">Last signal: ${last.dir > 0 ? 'buy' : 'sell'} at ${fmt(last.entry)}, ${esc(last.status.toLowerCase())}, <span class="${last.result >= 0 ? 'up' : 'down'}">${last.result >= 0 ? '+' : ''}${last.result.toFixed(2)}R</span>.</p>` : ''}`;
   }
@@ -1558,7 +1579,8 @@ const AF = (() => {
   }
   function closeSig(t, gross, status, time) {
     t.gross = gross; t.result = gross - costR(t); t.status = status; t.exitT = time; t.pips = t.result * t.risk / t.pip;
-    saveLedger(); notify('close', t); journalDirty = panelDirty = true;
+    const inst = byId[t.mk]; if (inst && inst.S) inst.S.cooldownUntil = inst.S.bars.length + 5;
+    saveLedger(); notify('close', t); journalDirty = panelDirty = true; dirty = true;
   }
 
   // ---------------- Telegram
@@ -1589,8 +1611,12 @@ const AF = (() => {
   }
   function closeCurrent(inst) {
     const S_ = inst.S, bar = finishBar(inst, S_.cur), before = S_.trades.length;
+    if (openSignalFor(inst.def.id)) S_.cooldownUntil = Infinity;   // one signal per market: the journal's open signal blocks new ones
     AF.closeBar(S_, bar);
-    if (S_.trades.length > before) { const tr = S_.trades[S_.trades.length - 1]; if (tr.k >= S_.liveFrom && !openSignalFor(inst.def.id)) addSignal(inst, tr); }
+    if (S_.trades.length > before) {
+      const tr = S_.trades.pop(); S_.active = null;                   // the journal, not the engine, owns live trades
+      if (!openSignalFor(inst.def.id)) addSignal(inst, tr);
+    }
     const o = openSignalFor(inst.def.id); if (o) { o.lastSeen = bar.t + S_.interval; saveLedger(); }
     newBar(inst, bar.t + S_.interval, bar.c);
     if (inst === cur) panelDirty = journalDirty = dirty = true; else journalDirty = true;
@@ -1625,13 +1651,20 @@ const AF = (() => {
     const iv = S_.interval;
     for (const b of bars) { if (b.t + iv > nowMs) { forming = b; continue; } AF.closeBar(S_, b); }
     S_.liveFrom = S_.bars.length;
-    clearHistoryActive(S_);
-    inst.S = S_;
+    inst.S = S_; syncEngine(inst);
     if (forming) { newBar(inst, forming.t, forming.o); Object.assign(S_.cur, { h: forming.h, l: forming.l, c: forming.c }); }
     else newBar(inst, Math.floor(nowMs / iv) * iv, S_.bars.length ? S_.bars[S_.bars.length - 1].c : 0);
     const o = openSignalFor(d.id);
     if (o) { for (const b of S_.bars) if (b.t + iv > o.lastSeen && o.result === null) stepSignal(o, b.h, b.l, b.c, b.t + iv); if (o.result === null) { o.lastSeen = nowMs; saveLedger(); } }
+    syncEngine(inst);
     inst.lastPx = S_.cur.c;
+  }
+  // the engine's own trade list is history only; live gating follows the journal
+  function syncEngine(inst) {
+    const N = inst.S; if (!N) return;
+    if (N.active) { N.active.status = 'Open when history ended'; N.active.exitIdx = Math.max(N.active.k, N.bars.length - 1); N.active = null; }
+    if (N.liveFrom !== undefined) N.trades = N.trades.filter(t => t.k < N.liveFrom);
+    N.cooldownUntil = openSignalFor(inst.def.id) ? Infinity : 0;
   }
   function clearHistoryActive(N) {
     const a = N.active;
@@ -2182,7 +2215,7 @@ const AF = (() => {
   // ---------------- engine controls (apply to every market)
   const readParams = (P, inst) => { inst = inst || cur; P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.useRegime = $('#useRegime').checked; P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01)); };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
-  function rebuildAll() { for (const i of insts) if (i.S) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); } if (cur.S) S = cur.S; afterRebuild(); }
+  function rebuildAll() { for (const i of insts) if (i.S) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
   $('#thr').oninput = e => { $('#thrv').textContent = e.target.value; for (const i of insts) if (i.S) i.S.params.threshold = +e.target.value; if (S) S.lastEval = reEval(); panelDirty = true; };
   $('#lookback').onchange = e => { for (const i of insts) if (i.S) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
   $('#rerun').onclick = () => rebuildAll();
