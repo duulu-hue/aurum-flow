@@ -85,6 +85,12 @@ canvas#chart{display:block;width:100%;height:100%;touch-action:pan-y;cursor:cros
 .factors .fp.on{color:var(--gold)}
 .factors .fd{grid-column:1/-1;color:var(--muted);font-size:12px}
 .valueOnly[hidden],.modelOnly[hidden]{display:none!important}
+.clsbox{margin-top:14px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);display:flex;flex-direction:column;gap:6px}
+.clshead{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px}
+.clshead b{font-family:var(--f-display);font-size:15px}
+.cls-status{margin:0;font-size:12.5px}
+.cls-status.warn{color:var(--gold)}
+#mdDeltaWrap[hidden]{display:none!important}
 .thrrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:12px;flex-wrap:wrap}
 .thrrow input[type=range]{flex:1;min-width:120px;accent-color:var(--gold)}
 dl.read{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;font-size:12.5px}
@@ -317,6 +323,12 @@ tr.open td{background:var(--gold-soft)}
         <button type="button" id="caseL" aria-pressed="true">Long case</button><button type="button" id="caseS" aria-pressed="false">Short case</button>
       </div>
       <ul class="factors" id="factors"></ul>
+      <div class="clsbox">
+        <div class="clshead"><span>Settings for <b id="clsName">Metals</b></span><button type="button" class="linkbtn" id="clsReset">Reset to tested defaults</button></div>
+        <p class="hintp" id="clsMembers"></p>
+        <p class="cls-status" id="clsStatus"></p>
+        <p class="hintp">Each market type keeps its own settings. Click a market in the strip to change its type's settings.</p>
+      </div>
       <div class="thrrow">
         <label for="stratSel">Strategy</label>
         <select id="stratSel"><option value="frvp">Your FRVP model</option><option value="value">Value-edge engine (old)</option></select>
@@ -329,7 +341,7 @@ tr.open td{background:var(--gold-soft)}
         <div class="thrrow">
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdSweep" style="accent-color:var(--gold)"> Require liquidity taken</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdChop" style="accent-color:var(--gold)"> Skip chop</label>
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree (gold, silver)</label>
+          <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
         </div>
         <div class="thrrow">
           <label for="mdRR">Minimum reward to TP2</label>
@@ -347,7 +359,7 @@ tr.open td{background:var(--gold-soft)}
       <div class="thrrow">
         <label for="tfSel">Entry timeframe</label>
         <select id="tfSel"><option value="1">1 minute</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="15">15 minutes</option></select>
-        <span class="muted" id="tfMsg" style="font-size:12px">Higher timeframe follows: 1m→15m, 3m→1H, 5m→1H, 15m→4H</span>
+        <span class="muted" id="tfMsg" style="font-size:12px">For this market type only. Higher timeframe follows: 1m→15m, 3m→1H, 5m→1H, 15m→4H</span>
       </div>
       <div class="thrrow valueOnly">
         <label for="trigMode">Entry trigger</label>
@@ -1895,17 +1907,42 @@ const AF = (() => {
   for (const m of allDefs()) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on !== false;
   Object.defineProperty(cfg, 'offset', { get: () => cfg.offsets[cur.def.id] || 0, enumerable: false });
   const saveCfg = () => LS.set('cfg', cfg);
-  if (![1, 3, 5, 15].includes(cfg.tf)) cfg.tf = 5;
+  // settings are kept per market type; tested values become the starting point for each type
+  const CLASS_INFO = {
+    metals: { name: 'Metals', status: 'Tested on 90 days: gold +0.16R and silver +0.19R per trade after costs (5m, liquidity required). Forward test before trading.', proven: true },
+    forex: { name: 'Forex', status: 'Not proven. On 90 days no forex setting held up on both EURUSD and GBPUSD. Signals are for testing only.', proven: false },
+    crypto: { name: 'Crypto', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false },
+    synthetics: { name: 'Synthetic indices', status: 'Not tested yet. These prices are random by design; run the History test before trusting a signal.', proven: false },
+    other: { name: 'Indices & commodities', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false }
+  };
+  const baseCls = () => ({ strategy: 'frvp', tf: 5, model: { dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5 }, threshold: 65, lookback: 120, trigger: 'flow', useHTF: true, useRegime: true });
+  const CLASS_DEFAULTS = { metals: baseCls(), forex: { ...baseCls(), tf: 15 }, crypto: baseCls(), synthetics: baseCls(), other: baseCls() };
+  if (!cfg.classes) {
+    cfg.classes = JSON.parse(JSON.stringify(CLASS_DEFAULTS));
+    if ([1, 3, 5, 15].includes(cfg.tf)) cfg.classes.metals.tf = cfg.tf;                     // keep what was set before types existed
+    if (cfg.model) cfg.classes.metals.model = Object.assign(cfg.classes.metals.model, cfg.model);
+  }
+  for (const k of Object.keys(CLASS_DEFAULTS)) cfg.classes[k] = Object.assign(JSON.parse(JSON.stringify(CLASS_DEFAULTS[k])), cfg.classes[k] || {});
+  delete cfg.tf; delete cfg.strategy; delete cfg.model;
+  function classOf(def) {
+    if (def.src === 'binance') return 'metals';
+    if (def.group === 'Commodities' && /XAU|XAG|XPT|XPD/.test(def.sym)) return 'metals';
+    if (def.group === 'Forex') return 'forex';
+    if (def.group === 'Crypto') return 'crypto';
+    if (def.rng || def.group === 'Synthetics') return 'synthetics';
+    return 'other';
+  }
+  const ccfg = inst => cfg.classes[classOf(inst.def)];
+  const tfOf = inst => ccfg(inst).tf;
   cfg.frvp = Object.assign({ range: 'rolling', sessStart: 0, sessEnd: 0, rows: 24, maxBars: 2500, vaPct: 70, intrabar: false, recentBars: 10, buySell: true, width: 20, table: true,
     hvn: true, hvnPct: 70, hvnGap: 2, hvnMax: 6, lvn: false, lvnPct: 15, conf: false, confDays: 5, confPct: 0.3, naked: false, nakedN: 3, alertHvn: false }, cfg.frvp || {});
   if (typeof cfg.hoursStart !== 'number') { cfg.hoursStart = 360; cfg.hoursEnd = 1200; }
   if (!cfg.hoursV) { if (cfg.hoursStart === 420) cfg.hoursStart = 360; cfg.hoursV = 2; }   // the user's own trades start from 06:00 UTC
-  if (!cfg.strategy) cfg.strategy = 'frvp';
-  cfg.model = Object.assign({ dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5 }, cfg.model || {});   // 07:00–20:00 UTC, London open to New York afternoon
+   // 07:00–20:00 UTC, London open to New York afternoon
   const ENGINE_FRVP = ['range', 'sessStart', 'sessEnd', 'rows', 'maxBars', 'vaPct', 'intrabar', 'recentBars', 'hvn', 'hvnPct', 'hvnGap', 'hvnMax', 'lvn', 'lvnPct'];
   const engineFrvp = () => Object.fromEntries(ENGINE_FRVP.map(k => [k, cfg.frvp[k]]));
   const HTF_MULT = { 1: 15, 3: 20, 5: 12, 15: 16 };
-  const TFMS = () => cfg.tf * 60000;
+
   const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(cur && cur.def.dec ? Math.min(cur.def.dec, 5) : 2)}`;
   const costPips = inst => cfg.costs[inst.def.id] ?? inst.def.cost;
   const unitWord = def => def.rng ? 'points' : 'pips';
@@ -1922,7 +1959,7 @@ const AF = (() => {
 
   function storeFor(inst) {
     const d = inst.def;
-    return AF.createStore({ mode: d.src === 'binance' ? 'live' : 'tick', hasBook: d.src === 'binance', hasFlow: d.src === 'binance', symbol: d.label, bin: d.bin, pip: d.pip, dec: d.dec, interval: TFMS(), htfMult: HTF_MULT[cfg.tf] });
+    return AF.createStore({ mode: d.src === 'binance' ? 'live' : 'tick', hasBook: d.src === 'binance', hasFlow: d.src === 'binance', symbol: d.label, bin: d.bin, pip: d.pip, dec: d.dec, interval: tfOf(inst) * 60000, htfMult: HTF_MULT[tfOf(inst)] });
   }
 
   // ---------------- live signal journal (this device, all markets)
@@ -1941,7 +1978,7 @@ const AF = (() => {
     const t = {
       id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
       entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2, tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2,
-      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + TFMS(), tf: cfg.tf, maxMs: Math.max(20 * TFMS(), (cfg.strategy === 'frvp' ? 24 : 4) * 3600e3),
+      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + tfOf(inst) * 60000, tf: tfOf(inst), maxMs: Math.max(20 * tfOf(inst) * 60000, (ccfg(inst).strategy === 'frvp' ? 24 : 4) * 3600e3),
       offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker
     };
     ledger.push(t); saveLedger(); notify('open', t); journalDirty = panelDirty = true;
@@ -2171,7 +2208,7 @@ const AF = (() => {
   }
   async function binFetchKlines(sym, startMs, endMs, limit, tfMin) {
     const q = startMs ? `&startTime=${Math.floor(startMs)}` : '';
-    const r = await fetch(`${REST}/fapi/v1/klines?symbol=${sym}&interval=${tfMin || cfg.tf}m&limit=${limit || 1000}${q}`);
+    const r = await fetch(`${REST}/fapi/v1/klines?symbol=${sym}&interval=${tfMin || 5}m&limit=${limit || 1000}${q}`);
     if (!r.ok) throw new Error('Binance answered HTTP ' + r.status);
     return (await r.json()).map(k => k.map(Number)).filter(v => !endMs || v[0] < endMs).map(v => kBar(v[0], v[1], v[2], v[3], v[4], v[5], v[9]));
   }
@@ -2179,7 +2216,7 @@ const AF = (() => {
     inst.starting = true; inst.warm = false; inst.pend = [];
     binConnectTrades(inst); binConnectDepth(inst);
     let bars = [];
-    try { bars = await binFetchKlines(inst.def.sym); }
+    try { bars = await binFetchKlines(inst.def.sym, null, null, 1000, tfOf(inst)); }
     catch { inst.note = 'Price history could not load, so this market builds from live trades only. Signals start after about two hours.'; }
     seedStore(inst, bars, Date.now() + inst.clockOff);
     inst.warm = true; inst.starting = false;
@@ -2229,7 +2266,7 @@ const AF = (() => {
     });
   }
   async function derivCandles(sym, startS, endS, tfMin) {
-    const req = { ticks_history: sym, style: 'candles', granularity: 60 * (tfMin || cfg.tf), end: endS ? String(endS) : 'latest', adjust_start_time: 1, count: 5000 };
+    const req = { ticks_history: sym, style: 'candles', granularity: 60 * (tfMin || 5), end: endS ? String(endS) : 'latest', adjust_start_time: 1, count: 5000 };
     if (startS) req.start = startS; else req.count = 1000;
     const d = await derivSend(req);
     return { pipSize: d.pip_size, bars: (d.candles || []).map(c => kBar(+c.epoch * 1000, +c.open, +c.high, +c.low, +c.close, 1, 0.5)) };
@@ -2237,7 +2274,7 @@ const AF = (() => {
   async function derivStart(inst) {
     inst.starting = true; inst.warm = false; inst.lastPx = null;
     let bars = [], pipSize = null;
-    try { const r = await derivCandles(inst.def.sym); bars = r.bars; pipSize = r.pipSize; }
+    try { const r = await derivCandles(inst.def.sym, null, null, tfOf(inst)); bars = r.bars; pipSize = r.pipSize; }
     catch (e) { inst.note = `Deriv history did not load (${e.message}).`; }
     const d = inst.def;
     if (pipSize != null && !d.pip) { d.dec = Math.max(0, Math.round(pipSize)); d.pip = Math.pow(10, -d.dec); }
@@ -2326,6 +2363,7 @@ const AF = (() => {
     $('#costLabel').textContent = `Costs per trade for ${inst.def.label} (${unitWord(inst.def)})`;
     $('#cost').value = costPips(inst); showOff();
     $('#histTitle').textContent = inst.def.label;
+    loadControls();
     fetchDaily(inst);
     if (inst.S) { S = inst.S; view.follow = true; custom = null; afterRebuild(); }
     else { S = null; if (cfg.enabled[id] && !inst.starting && !inst.warm) startInst(inst); else if (!cfg.enabled[id]) { cfg.enabled[id] = true; saveCfg(); renderMarketList(); startInst(inst); } }
@@ -2708,7 +2746,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === cfg.tf && v.sweep === base.model.sweep && v.delta === base.model.delta && !v.tpo) : (v.tf === cfg.tf && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !v.tpo) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -2722,24 +2760,44 @@ const AF = (() => {
   };
 
   // ---------------- engine controls (apply to every market)
-  const readParams = (P, inst) => { inst = inst || cur; P.threshold = +$('#thr').value; P.lookback = +$('#lookback').value; P.trigger = $('#trigMode').value; P.useHTF = $('#useHTF').checked; P.useRegime = $('#useRegime').checked; P.frvp = engineFrvp(); P.strategy = cfg.strategy; P.model = { ...cfg.model }; P.hours = (inst.def.rng || inst.def.group === 'Crypto') ? null : { start: cfg.hoursStart, end: cfg.hoursEnd }; P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01)); };
+  const readParams = (P, inst) => {
+    inst = inst || cur; const c = ccfg(inst);
+    P.threshold = c.threshold; P.lookback = c.lookback; P.trigger = c.trigger; P.useHTF = c.useHTF; P.useRegime = c.useRegime;
+    P.frvp = engineFrvp(); P.strategy = c.strategy; P.model = { ...c.model };
+    P.hours = (inst.def.rng || inst.def.group === 'Crypto') ? null : { start: cfg.hoursStart, end: cfg.hoursEnd };
+    P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01));
+  };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
-  function rebuildAll() { for (const i of insts) if (i.S) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
-  $('#thr').oninput = e => { $('#thrv').textContent = e.target.value; for (const i of insts) if (i.S) i.S.params.threshold = +e.target.value; if (S) S.lastEval = reEval(); panelDirty = true; };
-  $('#lookback').onchange = e => { for (const i of insts) if (i.S) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
+  function rebuildAll(onlyCls) { for (const i of insts) if (i.S && (!onlyCls || classOf(i.def) === onlyCls)) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
+  const curCls = () => classOf(cur.def), cc = () => cfg.classes[curCls()];
+  function showStrategy() { const mdl = cc().strategy === 'frvp'; document.querySelectorAll('.valueOnly').forEach(x => x.hidden = mdl); document.querySelectorAll('.modelOnly').forEach(x => x.hidden = !mdl); }
+  // fill the controls from the selected market's type
+  function loadControls() {
+    const c = cc(), k = curCls(), info = CLASS_INFO[k];
+    const members = insts.filter(i => cfg.enabled[i.def.id] && classOf(i.def) === k).map(i => i.def.label);
+    $('#clsName').textContent = info.name;
+    $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
+    $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
+    $('#stratSel').value = c.strategy; showStrategy();
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR);
+    $('#tfSel').value = String(c.tf);
+    $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
+    $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
+    $('#mdDeltaWrap').hidden = !insts.some(i => classOf(i.def) === k && i.def.src === 'binance');
+  }
+  const save = () => { saveCfg(); profCache.key = ''; rebuildAll(curCls()); };
+  $('#thr').oninput = e => { const v = +e.target.value; cc().threshold = v; $('#thrv').textContent = v; saveCfg(); for (const i of insts) if (i.S && classOf(i.def) === curCls()) i.S.params.threshold = v; if (S) S.lastEval = reEval(); panelDirty = true; };
+  $('#lookback').onchange = e => { cc().lookback = +e.target.value; saveCfg(); for (const i of insts) if (i.S && classOf(i.def) === curCls()) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
   $('#rerun').onclick = () => rebuildAll();
-  $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => rebuildAll();
-  const showStrategy = () => { const mdl = cfg.strategy === 'frvp'; document.querySelectorAll('.valueOnly').forEach(x => x.hidden = mdl); document.querySelectorAll('.modelOnly').forEach(x => x.hidden = !mdl); };
-  $('#stratSel').value = cfg.strategy; showStrategy();
-  $('#stratSel').onchange = e => { cfg.strategy = e.target.value; saveCfg(); showStrategy(); rebuildAll(); };
-  $('#mdDay').value = hhmm(cfg.model.dayStart); $('#mdSweep').checked = cfg.model.sweep; $('#mdChop').checked = cfg.model.chop; $('#mdDelta').checked = cfg.model.delta; $('#mdRR').value = String(cfg.model.minRR);
+  $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
+  $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
   $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = () => {
     const [h, m] = ($('#mdDay').value || '21:00').split(':').map(Number);
-    cfg.model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value };
-    saveCfg(); profCache.key = ''; rebuildAll();
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value };
+    save();
   };
-  $('#tfSel').value = String(cfg.tf);
-  $('#tfSel').onchange = e => { cfg.tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = 'Reloading every market on the new timeframe…'; setTimeout(() => location.reload(), 300); };
+  $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
+  $('#clsReset').onclick = () => { cfg.classes[curCls()] = JSON.parse(JSON.stringify(CLASS_DEFAULTS[curCls()])); saveCfg(); setTimeout(() => location.reload(), 200); };
   const reEval = () => S && S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
