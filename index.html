@@ -350,7 +350,7 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdAlign" style="accent-color:var(--gold)"> Trade with 15m &amp; 1H structure</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdConfirm" style="accent-color:var(--gold)"> Wait for a retest that holds</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdNoPoc" style="accent-color:var(--gold)"> Skip POC entries</label>
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdBias" style="accent-color:var(--gold)"> Top-down: trade only when 4H &amp; 1H agree</label>
+          <label style="display:flex;align-items:center;gap:6px">Top-down <select id="mdBias"><option value="">off</option><option value="both">4H &amp; 1H agree</option><option value="h4">4H only</option></select></label>
           <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
         </div>
         <div class="thrrow">
@@ -422,7 +422,7 @@ tr.open td{background:var(--gold-soft)}
       <section>
         <h4>Your FRVP model: structure, retest and quality</h4>
         <p><b>Trade with 15m &amp; 1H structure</b>: longs only when the last swing high was broken on both 15m and 1H (shorts: last swing low). <b>Wait for a retest that holds</b>: after the setup prints, the engine waits up to two hours for price to come back to the zone and close rejected, without a new extreme beyond the sweep; it enters on that close, with the stop beyond the sweep. If price breaks the sweep first, the setup is cancelled.</p>
-        <p><b>Top-down (forex plan)</b>: before any setup the engine reads 4H and 1H structure. Both up means longs only, both down means shorts only, anything else is mixed and it stands aside. "Skip POC entries" leaves out the POC, the middle of value where price rotates, and keeps only value edges and HVNs.</p>
+        <p><b>Top-down (forex plan)</b>: before any setup the engine reads 4H and 1H structure. "4H &amp; 1H agree": both up means longs only, both down shorts only, anything else is mixed and it stands aside. "4H only": the 4H sets the side and 1H pullbacks against it are allowed, which is where liquidity sweeps happen. "Skip POC entries" leaves out the POC, the middle of value where price rotates, and keeps only value edges and HVNs.</p>
         <p><b>Setup quality</b> starts at 50 and adds only what helped on both gold and silver in the 90-day test: delta agrees with the trade (+15), zone not stacked on another level (+10), zone is not the POC (+10), London hours 06:00–12:00 UTC (+10). 80+ is A+, 65–79 is A. The History test shows how each band actually performed.</p>
       </section>
       <section>
@@ -832,9 +832,12 @@ const AF = (() => {
     const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
     const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60), s240 = mtfTrend(S, k, 240);
     // top-down verdict: the 4H and 1H must point the same way, otherwise the pair is mixed and the model stands aside
-    const verdict = s240 !== 'none' && s240 === s60 ? s240 : 'none';
+    // bias 'h4' reads the 4H alone (pullbacks against the 1H are allowed); any other truthy value needs 4H and 1H to agree
+    const h4only = m.bias === 'h4', verdict = h4only ? s240 : (s240 !== 'none' && s240 === s60 ? s240 : 'none');
     const tdWord = x => x === 'up' ? 'up' : x === 'down' ? 'down' : 'undecided';
-    const tdText = verdict === 'none' ? `Top-down is mixed: 4H ${tdWord(s240)}, 1H ${tdWord(s60)}. No trade until both agree.` : `Top-down: 4H and 1H both ${verdict}, so ${verdict === 'up' ? 'longs' : 'shorts'} only.`;
+    const tdText = h4only
+      ? (verdict === 'none' ? 'Top-down: the 4H has no clear structure yet. No trade.' : `Top-down: the 4H is ${verdict}, so ${verdict === 'up' ? 'longs' : 'shorts'} only (1H ${tdWord(s60)}).`)
+      : (verdict === 'none' ? `Top-down is mixed: 4H ${tdWord(s240)}, 1H ${tdWord(s60)}. No trade until both agree.` : `Top-down: 4H and 1H both ${verdict}, so ${verdict === 'up' ? 'longs' : 'shorts'} only.`);
     // a retest setup waits at most ~2 hours; state only moves forward once per bar
     const fresh = S._mk === undefined || k > S._mk; if (fresh) S._mk = k;
     S._arm = S._arm || { 1: null, '-1': null };
@@ -896,7 +899,7 @@ const AF = (() => {
         else qf.detail = 'Needs a setup first, then a rejected retest of its zone.';
       } else { qf.na = true; qf.detail = 'Switched off: entries are taken on the CISD.'; if (trigger) { entry = b.c; beyond = up ? Math.min(sweepExt, zone ? zone.lo : Infinity, ext) : Math.max(sweepExt, zone ? zone.hi : -Infinity, ext); } }
       if (!m.align) { sf.na = !aligned; if (sf.na) sf.detail += ' (not required)'; }
-      if (m.bias) { sf.label = 'Top-down 4H & 1H'; sf.na = false; sf.pts = verdict === want ? 15 : 0; sf.detail = tdText; }
+      if (m.bias) { sf.label = h4only ? 'Top-down 4H' : 'Top-down 4H & 1H'; sf.na = false; sf.pts = verdict === want ? 15 : 0; sf.detail = tdText; }
       const ref = entry != null ? entry : b.c;
       const buf = Math.max(0.1 * hAtr, 2 * S.pip);
       let sl = (beyond != null ? beyond : (up ? Math.min(sweepExt, ext) : Math.max(sweepExt, ext))) - d * buf, risk = d * (ref - sl);
@@ -2768,6 +2771,9 @@ const AF = (() => {
   // ---------------- history test for the selected market
   // downloaded 1-minute history is kept for this session, so a rerun or a longer period only fetches what is missing
   const histCache = {};
+  const idb = (() => { let p = null; const open = () => p || (p = new Promise((res, rej) => { try { const r = indexedDB.open('aurum-hist', 1); r.onupgradeneeded = () => r.result.createObjectStore('bars'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }));
+    const tx = (mode, fn) => open().then(db => new Promise((res, rej) => { const t = db.transaction('bars', mode), q = fn(t.objectStore('bars')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }));
+    return { get: id => tx('readonly', s => s.get(id)).catch(() => null), put: (id, v) => tx('readwrite', s => s.put(v, id)).catch(() => null) }; })();
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const isRateLimit = e => e && (e.code === 'RateLimit' || /rate limit/i.test(e.message || ''));
   const retryable = ex => isRateLimit(ex) || (ex && (ex.code === 'Timeout' || ex.code === 'Disconnected')) || /did not answer|connection|Failed to fetch|NetworkError|HTTP 5\d\d/i.test((ex && ex.message) || '');
@@ -2802,6 +2808,10 @@ const AF = (() => {
   }
   async function historyBars(inst, days, say) {
     const end = Date.now() + inst.clockOff, start = end - days * 86400e3, id = inst.def.id;
+    if (!histCache[id]) { const saved = await idb.get(id); if (saved && saved.bars && saved.bars.length) histCache[id] = saved; }
+    try { return await historyBarsNet(inst, start, end, id, say); } finally { if (histCache[id]) idb.put(id, histCache[id]); }
+  }
+  async function historyBarsNet(inst, start, end, id, say) {
     const c = histCache[id];
     const ranges = !c || c.to < start ? [[start, end]] : [start < c.from ? [start, c.from] : null, [c.to, end]].filter(Boolean);
     const total = ranges.reduce((s, [a, b]) => s + (b - a), 0); let done = 0;
@@ -2875,6 +2885,7 @@ const AF = (() => {
     renderBreakdown(list);
     $('#histTrades').hidden = false;
   }
+  const biasKey = x => x === 'h4' ? 'h4' : x ? 'both' : '';
   // which conditions separate winners from losers in this version
   function renderBreakdown(list) {
     const withTags = list.filter(t => t.tags); if (!withTags.length) { $('#histBreak').innerHTML = ''; return; }
@@ -2918,9 +2929,9 @@ const AF = (() => {
         if (fx) for (const tf of [15, 5]) {
           const o = { sweep: true, delta: false, align: false, confirm: false, noPoc: false, bias: false };
           grid.push([`${tf}m · v1 current rules`, tf, { ...o }]);
-          grid.push([`${tf}m · + no POC entries`, tf, { ...o, noPoc: true }]);
-          grid.push([`${tf}m · + top-down 4H & 1H`, tf, { ...o, bias: true }]);
-          grid.push([`${tf}m · forex plan: top-down + no POC + retest`, tf, { ...o, noPoc: true, bias: true, confirm: true }]);
+          grid.push([`${tf}m · + top-down 4H & 1H`, tf, { ...o, bias: 'both' }]);
+          grid.push([`${tf}m · + top-down 4H only`, tf, { ...o, bias: 'h4' }]);
+          grid.push([`${tf}m · 4H only + no POC + retest`, tf, { ...o, noPoc: true, bias: 'h4', confirm: true }]);
         }
         else for (const tf of [15, 5]) {
           grid.push([`${tf}m · v1 current rules`, tf, { sweep: true, delta: false, align: false, confirm: false }]);
@@ -2936,7 +2947,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && !!v.bias === !!base.model.bias) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias)) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -2972,7 +2983,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').checked = !!c.model.bias;
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias);
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -2986,7 +2997,7 @@ const AF = (() => {
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
   $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').checked };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
