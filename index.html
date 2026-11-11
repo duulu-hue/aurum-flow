@@ -91,6 +91,9 @@ canvas#chart{display:block;width:100%;height:100%;touch-action:pan-y;cursor:cros
 .cls-status{margin:0;font-size:12.5px}
 .cls-status.warn{color:var(--gold)}
 #mdDeltaWrap[hidden]{display:none!important}
+table.bk{min-width:620px;max-width:820px}
+table.bk tr.grp td{border-top:1px solid var(--line)}
+table.bk td:first-child{font-weight:600}
 .tl-h{margin:22px 0 10px;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 table.tl td.why{white-space:normal;min-width:320px;font-size:12px;color:var(--muted)}
 table.tl{min-width:1100px}
@@ -408,6 +411,7 @@ tr.open td{background:var(--gold-soft)}
         <button class="btn" id="histCsv" type="button">Download trades (CSV)</button>
       </div>
       <p class="hintp" id="histTradesMsg" style="margin-bottom:8px"></p>
+      <div id="histBreak"></div>
       <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Quality</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
     </div>
   </div>
@@ -937,7 +941,13 @@ const AF = (() => {
         : [prof.poc, ...prof.zones.filter(z => z.price > b.c).map(z => z.price), prof.vah].filter(p => p >= b.c - atr).sort((a, c) => a - c)[0];
       const liqTxt = liqs.length ? `${liqs[0][1]} ${f(liqs[0][0])}` : 'recent liquidity';
       const plan = `${m.align ? `15m and 1H structure ${want}, then ` : ''}${up ? 'sell' : 'buy'}-side liquidity (${liqTxt}) taken and a ${up ? 'bullish' : 'bearish'} CISD at ${nz != null ? f(nz) : 'an FRVP zone'}${m.confirm ? ', then a retest of that zone that holds' : ''}. Target ${cands.length ? `${cands[0][1]} ${f(cands[0][0])}` : 'the next key level'}.`;
-      return { dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
+      const stacked = zP != null && [prof.poc, prof.val, prof.vah, ...prof.zones.map(z => z.price)].some(p => Math.abs(p - zP) > 1e-9 && Math.abs(p - zP) <= prof.rowH * 1.01);
+      const rgk = regime(S, k).kind;
+      const tags = { liq: liqName && /previous day/.test(liqName) ? 'previous day high/low' : 'last 1H high/low', zone: zName ? zName.replace(/support |resistance /, '') : '–', stacked,
+        h1: s60 === want ? 'with' : s60 === 'none' ? 'undecided' : 'against', m15: s15 === want ? 'with' : s15 === 'none' ? 'undecided' : 'against',
+        day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
+        delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short' };
+      return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
         setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
@@ -1135,7 +1145,7 @@ const AF = (() => {
     const t = {
       id: S.trades.length + 1, dir: c.dir, setup: c.setup, k, t: S.bars[k].t, entry: c.entry, sl: c.sl, sl0: c.sl,
       tp1: c.tp1, tp2: c.tp2, tp1Name: c.tp1Name, tp2Name: c.tp2Name, risk: c.risk, rr1: c.rr1, rr2: c.rr2, score: c.score,
-      factors: c.factors.map(x => ({ ...x })), exitMode: exitModeOf(S), stage: 0, realized: 0, status: 'Running', result: null, exitIdx: null, exitPrice: null, pips: null
+      factors: c.factors.map(x => ({ ...x })), tags: c.tags || null, exitMode: exitModeOf(S), stage: 0, realized: 0, status: 'Running', result: null, exitIdx: null, exitPrice: null, pips: null
     };
     t.narrative = narrate(S, c);
     S.trades.push(t); S.active = t;
@@ -2836,7 +2846,7 @@ const AF = (() => {
     // the bar index is when the signal bar opened; the signal fires at its close
     s.trades = closed.map(t => ({ t: t.t + T.interval, exitT: t.exitIdx != null && T.bars[t.exitIdx] ? T.bars[t.exitIdx].t + T.interval : null, dir: t.dir, setup: t.setup,
       entry: t.entry, sl: t.sl0, tp1: t.tp1, tp2: t.tp2, tp1Name: t.tp1Name, tp2Name: t.tp2Name, risk: t.risk, net: t.result - params.costPrice / t.risk, status: t.status,
-      zone: [fd(t, 'zone'), fd(t, 'align'), fd(t, 'confirm')].filter(Boolean).join(' '), liq: fd(t, 'liq'), q: t.score, dec: T.dec, pip: T.pip }));
+      zone: [fd(t, 'zone'), fd(t, 'align'), fd(t, 'confirm')].filter(Boolean).join(' '), liq: fd(t, 'liq'), q: t.score, tags: t.tags, dec: T.dec, pip: T.pip }));
     return s;
   }
   // ---- trade list for one tested version, so a trader can review each signal on their own chart
@@ -2851,7 +2861,28 @@ const AF = (() => {
     const w = list.filter(t => t.net > 0.05).length, l = list.filter(t => t.net < -0.05).length;
     const band = (lo, hi, name) => { const g = list.filter(t => t.q >= lo && t.q < hi); if (!g.length) return `${name}: none`; const ww = g.filter(t => t.net > 0.05).length, avg = g.reduce((a, t) => a + t.net, 0) / g.length; return `${name}: ${g.length} trades, ${Math.round(100 * ww / g.length)}% won, ${avg >= 0 ? '+' : ''}${avg.toFixed(2)}R each`; };
     $('#histTradesMsg').textContent = `${pick[0]} on ${histMarket}: ${list.length} trades, ${w} winners, ${l} losers. By setup quality: ${band(80, 999, 'A+ (80+)')} · ${band(65, 80, 'A (65–79)')} · ${band(0, 65, 'B (under 65)')}. Times are your local time; prices are the data feed's, so your broker's chart can differ by a few points.`;
+    renderBreakdown(list);
     $('#histTrades').hidden = false;
+  }
+  // which conditions separate winners from losers in this version
+  function renderBreakdown(list) {
+    const withTags = list.filter(t => t.tags); if (!withTags.length) { $('#histBreak').innerHTML = ''; return; }
+    const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
+    const groups = [
+      ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
+      ['Session', sess], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
+      ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
+    ];
+    const rows = [];
+    for (const [name, key] of groups) {
+      const m = new Map(); for (const t of withTags) { const v = key(t); if (v == null) continue; if (!m.has(v)) m.set(v, []); m.get(v).push(t); }
+      if (m.size < 2) continue;
+      [...m.entries()].sort((a, b) => b[1].length - a[1].length).forEach(([v, g], i) => {
+        const w = g.filter(t => t.net > 0.05).length, avg = g.reduce((a, t) => a + t.net, 0) / g.length;
+        rows.push(`<tr${i === 0 ? ' class="grp"' : ''}><td>${i === 0 ? esc(name) : ''}</td><td>${esc(v)}</td><td class="num">${g.length}</td><td class="num">${Math.round(100 * w / g.length)}%</td><td class="num ${avg >= 0 ? 'up' : 'down'}">${avg >= 0 ? '+' : ''}${avg.toFixed(2)}R</td><td class="num">${g.length < 15 ? '<span class="muted">too few</span>' : ''}</td></tr>`);
+      });
+    }
+    $('#histBreak').innerHTML = `<h3 class="tl-h">What separates winners from losers</h3><p class="hintp" style="margin-bottom:8px">Each condition at the moment of the signal, with the win rate and average result of the trades that had it. Groups under 15 trades are too small to trust.</p><div class="tablewrap"><table class="bk"><thead><tr><th>Condition</th><th>Value</th><th class="num">Trades</th><th class="num">Won</th><th class="num">Avg per trade</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
   }
   $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
   $('#histCsv').onclick = () => {
