@@ -91,6 +91,9 @@ canvas#chart{display:block;width:100%;height:100%;touch-action:pan-y;cursor:cros
 .cls-status{margin:0;font-size:12.5px}
 .cls-status.warn{color:var(--gold)}
 #mdDeltaWrap[hidden]{display:none!important}
+.tl-h{margin:22px 0 10px;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+table.tl td.why{white-space:normal;min-width:320px;font-size:12px;color:var(--muted)}
+table.tl{min-width:1100px}
 .thrrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:12px;flex-wrap:wrap}
 .thrrow input[type=range]{flex:1;min-width:120px;accent-color:var(--gold)}
 dl.read{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;font-size:12.5px}
@@ -395,6 +398,16 @@ tr.open td{background:var(--gold-soft)}
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
+    <div id="histTrades" hidden>
+      <h3 class="tl-h">Trades to review</h3>
+      <div class="frow" style="margin-bottom:8px">
+        <label for="histPick">Version</label><select id="histPick"></select>
+        <select id="histShow" aria-label="Which trades"><option value="all">All trades</option><option value="loss">Losers only</option><option value="win">Winners only</option></select>
+        <button class="btn" id="histCsv" type="button">Download trades (CSV)</button>
+      </div>
+      <p class="hintp" id="histTradesMsg" style="margin-bottom:8px"></p>
+      <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
+    </div>
   </div>
   <div class="pane" id="pane-rules" hidden>
     <div class="rules">
@@ -2726,8 +2739,36 @@ const AF = (() => {
       AF.closeBar(T, bars[i]);
       if (i % 2500 === 0) { say(`Testing ${label}… ${Math.round(i / bars.length * 100)}%`); await new Promise(r => setTimeout(r)); }
     }
-    return summarize(T.trades.filter(t => t.result !== null).map(t => ({ t: t.t, dir: t.dir, net: t.result - params.costPrice / t.risk })), days, splitT);
+    const closed = T.trades.filter(t => t.result !== null);
+    const s = summarize(closed.map(t => ({ t: t.t, dir: t.dir, net: t.result - params.costPrice / t.risk })), days, splitT);
+    const fd = (t, key) => { const f = (t.factors || []).find(x => x.key === key); return f && f.pts > 0 ? f.detail : ''; };
+    // the bar index is when the signal bar opened; the signal fires at its close
+    s.trades = closed.map(t => ({ t: t.t + T.interval, exitT: t.exitIdx != null && T.bars[t.exitIdx] ? T.bars[t.exitIdx].t + T.interval : null, dir: t.dir, setup: t.setup,
+      entry: t.entry, sl: t.sl0, tp1: t.tp1, tp2: t.tp2, tp1Name: t.tp1Name, tp2Name: t.tp2Name, risk: t.risk, net: t.result - params.costPrice / t.risk, status: t.status,
+      zone: fd(t, 'zone'), liq: fd(t, 'liq'), dec: T.dec, pip: T.pip }));
+    return s;
   }
+  // ---- trade list for one tested version, so a trader can review each signal on their own chart
+  let histRes = [], histMarket = '';
+  const localTime = ms => { const d = new Date(ms); return `${d.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`; };
+  function renderHistTrades() {
+    const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
+    const list = pick[2].trades || [], f = (t, x) => x.toFixed(t.dec), filt = $('#histShow').value;
+    const shown = list.filter(t => filt === 'all' || (filt === 'loss' ? t.net < -0.05 : t.net > 0.05)).slice().reverse();
+    $('#histTradesBody').innerHTML = shown.map(t => `<tr><td class="num">${list.indexOf(t) + 1}</td><td class="num">${localTime(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td class="num">${f(t, t.entry)}</td><td class="num">${f(t, t.sl)}</td><td class="num">${f(t, t.tp1)}</td><td class="num">${f(t, t.tp2)}</td><td class="num ${t.net >= 0 ? 'up' : 'down'}">${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}R</td><td>${esc(t.status)}</td><td class="why">${esc(t.zone)} ${esc(t.liq)}</td></tr>`).join('')
+      || '<tr><td colspan="10" class="muted">No trades in this filter.</td></tr>';
+    const w = list.filter(t => t.net > 0.05).length, l = list.filter(t => t.net < -0.05).length;
+    $('#histTradesMsg').textContent = `${pick[0]} on ${histMarket}: ${list.length} trades, ${w} winners, ${l} losers. Times are your local time; prices are the data feed's, so your broker's chart can differ by a few points.`;
+    $('#histTrades').hidden = false;
+  }
+  $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
+  $('#histCsv').onclick = () => {
+    const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
+    const head = 'number,local_time,utc_time,side,entry,stop,tp1,tp1_level,tp2,tp2_level,result_R_after_costs,outcome,zone,liquidity,your_verdict,your_reason\n';
+    const q = s => `"${String(s).replace(/"/g, '""')}"`;
+    const body = pick[2].trades.map((t, i) => [i + 1, q(localTime(t.t)), new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.entry.toFixed(t.dec), t.sl.toFixed(t.dec), t.tp1.toFixed(t.dec), q(t.tp1Name), t.tp2.toFixed(t.dec), q(t.tp2Name), t.net.toFixed(2), q(t.status), q(t.zone), q(t.liq), '', ''].join(',')).join('\n');
+    saveFile(new Blob([head + body], { type: 'text/csv' }), `aurum-${histMarket.toLowerCase()}-${pick[0].replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`);
+  };
   let histBusy = false;
   $('#histRun').onclick = async () => {
     if (histBusy || !live || !cur.S) return; histBusy = true; $('#histRun').disabled = true;
@@ -2760,6 +2801,9 @@ const AF = (() => {
       const part = (x, n) => x === null ? '–' : `<span class="${x >= 0 ? 'up' : 'down'}">${x >= 0 ? '+' : ''}${x.toFixed(2)}R</span> <span class="muted">(${n})</span>`;
       $('#histBody').innerHTML = res.map(([name, v, s]) => `<tr class="${s === mine[2] ? 'open' : ''}"><td>${esc(name)}${s === mine[2] ? ' <span class="muted">(your settings)</span>' : ''}${best && s === best[2] ? ' <span class="up">steady</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${s.perDay.toFixed(1)}</td><td class="num">${s.n ? Math.round(s.wr * 100) + '%' : '–'}</td><td class="num ${cls(s.exp)}">${s.n ? sR(s.exp) : '–'}</td><td class="num ${cls(s.netR)}">${s.netR >= 0 ? '+' : ''}${s.netR.toFixed(1)}R</td><td class="num">${s.pf === Infinity ? '∞' : s.pf.toFixed(2)}</td><td class="num">${s.dd.toFixed(1)}R</td><td class="num">${s.L.n} · <span class="${cls(s.L.r)}">${s.L.r >= 0 ? '+' : ''}${s.L.r.toFixed(1)}R</span></td><td class="num">${s.Sh.n} · <span class="${cls(s.Sh.r)}">${s.Sh.r >= 0 ? '+' : ''}${s.Sh.r.toFixed(1)}R</span></td><td class="num">${part(s.e1, s.n1)}</td><td class="num">${part(s.e2, s.n2)}</td></tr>`).join('');
       $('#histTable').hidden = false;
+      histRes = res; histMarket = inst.def.label;
+      $('#histPick').innerHTML = res.map(r => `<option${r === mine ? ' selected' : ''}>${esc(r[0])}</option>`).join('');
+      renderHistTrades();
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
       say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile, CISD trigger, minimum ${base.model.minRR}R to TP2).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
