@@ -354,6 +354,8 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdFree" style="accent-color:var(--gold)"> A runner at breakeven gives way to a new signal</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdOneTry" style="accent-color:var(--gold)"> No second try on a side after a stop-out (same day)</label>
           <label style="display:flex;align-items:center;gap:6px">TP2 <select id="mdTp2"><option value="far">farthest key level</option><option value="near">nearest key level past the minimum</option></select></label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdBase" style="accent-color:var(--gold)"> Breathing space: hold 30 min, new node, MSS, limit at the node</label>
+          <label style="display:flex;align-items:center;gap:6px">Level confirmed on <select id="mdMtf"><option value="">entry profile only</option><option value="30">the 30m profile too</option><option value="both">the 15m and 30m profiles too</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">15m order block setup <select id="mdObz"><option value="">off</option><option value="hvn">with an HVN inside</option><option value="any">with any FRVP level inside</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Retest entry <select id="mdOb"><option value="">rejected retest of the zone</option><option value="limit">limit at the order block</option><option value="close">order block + rejection close</option><option value="stacked">order block on stacked zones only</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Signal window <select id="mdWin"><option value="">all trading hours</option><option value="ldn">06:00–12:00 UTC</option><option value="ldnny">06:00–15:00 UTC</option></select></label>
@@ -703,7 +705,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -928,6 +930,23 @@ const AF = (() => {
     c.upto = Math.max(c.upto, k);
     return c;
   }
+  // the same two-day profile rebuilt from 15m and 30m candles. Each candle's volume lands on its midpoint row, so
+  // coarser candles move the nodes; a level that is a key level at every resolution is real volume, not bucketing.
+  function mtfLevels(S, k, td) {
+    if (S._mtfp && S._mtfp.k === k) return S._mtfp;
+    const out = { k };
+    for (const mins of [15, 30]) {
+      const ms = mins * 60000, agg = [];
+      for (const j of td.idx) {
+        const b = S.bars[j], key = Math.floor(b.t / ms), a = agg[agg.length - 1];
+        if (a && a.key === key) { if (b.h > a.h) a.h = b.h; if (b.l < a.l) a.l = b.l; a.c = b.c; a.v += b.v || 0; }
+        else agg.push({ key, t: key * ms, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0, fp: null });
+      }
+      const p = agg.length >= 8 ? frvp({ bars: agg, BIN: S.BIN }, agg.map((_, i) => i), { ...td.o, intrabar: false }) : null;
+      out[mins] = p ? { rowH: p.rowH, lv: [[p.poc, 'POC'], [p.val, 'VAL'], [p.vah, 'VAH'], ...p.zones.map(z => [z.price, 'HVN'])] } : null;
+    }
+    return (S._mtfp = out);
+  }
   function modelEval(S, k) {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), m = modelOpts(S), f = x => x.toFixed(S.dec);
     const prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
@@ -953,7 +972,7 @@ const AF = (() => {
       : (verdict === 'none' ? `Top-down is mixed: 4H ${tdWord(s240)}, 1H ${tdWord(s60)}. No trade until both agree.` : `Top-down: 4H and 1H both ${verdict}, so ${verdict === 'up' ? 'longs' : 'shorts'} only.`);
     // a retest setup waits at most ~2 hours; state only moves forward once per bar
     const fresh = S._mk === undefined || k > S._mk; if (fresh) S._mk = k;
-    S._arm = S._arm || { 1: null, '-1': null };
+    S._arm = S._arm || { 1: null, '-1': null }; S._base = S._base || { 1: null, '-1': null };
     const armBars = Math.max(4, Math.round(2 * 3600e3 / S.interval)), obBars = Math.max(6, Math.round(3 * 3600e3 / S.interval)), tol = 0.25 * atr, mU = new Date(b.t + S.interval).getUTCHours();
     const side = d => {
       const up = d > 0, fac = (key, label, max) => ({ key, label, max, pts: 0, detail: '' });
@@ -972,6 +991,7 @@ const AF = (() => {
       }
       if (zone) { zf.pts = 25; zf.detail = `Price traded ${up ? 'down into' : 'up into'} the ${zone.name} at ${f(zone.price)} and closed back ${up ? 'above' : 'below'} it.`; }
       else zf.detail = `Not at the POC (${f(prof.poc)}), ${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'} right now.`;
+      const zDetail0 = zf.detail;
       const liqs = [];
       if (up) { if (pdl != null) liqs.push([pdl, 'previous day low']); if (h1) liqs.push([h1.l, `last ${tfH} low`]); if (h2) liqs.push([h2.l, `prior ${tfH} low`]); }
       else { if (pdh != null) liqs.push([pdh, 'previous day high']); if (h1) liqs.push([h1.h, `last ${tfH} high`]); if (h2) liqs.push([h2.h, `prior ${tfH} high`]); }
@@ -995,10 +1015,17 @@ const AF = (() => {
         of.pts = ok ? 10 : 0; of.detail = `Delta on this bar ${S.delta[k] >= 0 ? '+' : ''}${Math.round(S.delta[k])}, last 4 bars ${d4 >= 0 ? '+' : ''}${Math.round(d4)}: ${ok ? 'agrees' : 'does not agree'} with the ${up ? 'long' : 'short'}.`;
       } else { of.na = true; of.detail = 'No traded volume on this feed.'; }
       if (chop) cf.detail = `Choppy: price crossed the POC ${crosses} times in the last 16 bars.`; else { cf.pts = 10; cf.detail = `Not choppy: ${crosses} POC crosses in the last 16 bars.`; }
+      // multi-timeframe level check: the zone must also be a key level on the profile rebuilt from 15m and/or 30m candles
+      let mtfOk = true, mtfTxt = '';
+      if (m.mtfLvl && zone) {
+        const ml = mtfLevels(S, k, td), need = m.mtfLvl === 'both' ? [15, 30] : [30];
+        const hits = need.map(mins => { const q = ml[mins]; if (!q) return null; const h = q.lv.filter(x => Math.abs(x[0] - zone.price) <= 0.75 * Math.max(q.rowH, prof.rowH)).sort((x, y) => Math.abs(x[0] - zone.price) - Math.abs(y[0] - zone.price))[0]; return h ? `${mins}m ${h[1]} ${f(h[0])}` : null; });
+        mtfOk = hits.every(Boolean); mtfTxt = mtfOk ? `The same level is a key level on the ${hits.join(' and ')} profile.` : `The ${zone.name} is not a key level on the ${need.join('m and ')}m profile.`;
+      }
       const flowOk = !m.delta || of.na || of.pts > 0, c4Ok = !m.htf || (m.htf === 'only' ? c4dir === d : c4dir !== -d), alignOk = (!m.align || aligned) && (!m.bias || verdict === want) && c4Ok;
       // with the retest on, delta is judged on the retest bar (the entry), not on the setup bar
       const retry = m.oneTry && lossDay[d] === dayKey;
-      const trigger = !chop && !retry && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
+      const trigger = !m.base && !chop && !retry && mtfOk && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
 
       // entry: straight on the trigger, or after a retest of the zone that is rejected (the user's confirmation)
       let entry = null, beyond = null, confirmed = false, arm = S._arm[d];
@@ -1101,6 +1128,49 @@ const AF = (() => {
           break;
         }
       }
+      // setup D, breathing space: price takes liquidity at the zone, then holds above the low for at least 30 minutes,
+      // builds a new volume node near the zone, and breaks the last swing high (MSS). Entry is a limit at that new node,
+      // stop beyond the low. A deeper low restarts the wait; nothing is traded on the first touch.
+      let D4 = null, dWhy = null;
+      if (m.base && k >= 12) {
+        let st = S._base[d];
+        if (fresh) {
+          if (st && (up ? b.l < st.low : b.h > st.low)) { st.low = up ? b.l : b.h; st.kLow = k; st.mss = null; st.nh = null; }
+          if (st && (k - st.kLow > Math.round(4 * 3600e3 / S.interval) || (st.mss != null && k - st.mss > Math.round(2 * 3600e3 / S.interval)))) st = S._base[d] = null;
+          if (!st && zone && swept && !chop && !retry && mtfOk && alignOk) st = S._base[d] = { k0: k, kLow: k, low: sweepExt, zone: zone.name, zoneP: zone.price, liq: swept.name, mss: null, nh: null };
+        }
+        if (st) {
+          const baseBars = Math.max(4, Math.round(30 * 60000 / S.interval));
+          if (k - st.kLow < baseBars) dWhy = `Liquidity taken at the ${st.zone}. Giving price room: ${baseBars - (k - st.kLow)} more bars without a new ${up ? 'low' : 'high'} before anything else.`;
+          else {
+            // the developing node: POC of the bars since the low
+            const idx = []; for (let j = st.kLow; j <= k; j++) idx.push(j);
+            const bp = frvp(S, idx, { ...td.o, rows: 12, intrabar: false });
+            const nh = bp ? bp.poc : null, nhOk = nh != null && (up ? nh >= st.zoneP - 0.5 * atr && nh <= st.zoneP + 2 * atr : nh <= st.zoneP + 0.5 * atr && nh >= st.zoneP - 2 * atr);
+            // the last swing against the trade before the low (a lower high for a long)
+            let sw = null; for (let j = st.kLow - 1; j >= Math.max(2, st.kLow - 36); j--) { const B = S.bars; if (j + 2 > k) continue;
+              if (up ? (B[j].h > B[j - 1].h && B[j].h > B[j - 2].h && B[j].h >= B[j + 1].h && B[j].h >= B[j + 2].h) : (B[j].l < B[j - 1].l && B[j].l < B[j - 2].l && B[j].l <= B[j + 1].l && B[j].l <= B[j + 2].l)) { sw = up ? B[j].h : B[j].l; break; } }
+            if (fresh && st.mss == null && sw != null && nhOk && (up ? b.c > sw : b.c < sw) && flowOk) { st.mss = k; st.nh = nh; st.sw = sw; }
+            if (!nhOk) dWhy = `Holding at the ${st.zone}, but no volume node has built near it yet${nh != null ? ` (the node since the low is at ${f(nh)})` : ''}.`;
+            else if (st.mss == null) dWhy = `A ${up ? 'support' : 'resistance'} node is building at ${f(nh)}. Waiting for a market structure shift: a close ${up ? 'above' : 'below'} ${sw != null ? f(sw) : 'the last swing'}.`;
+            else if (k > st.mss) {
+              const L = st.nh, reached = up ? b.l <= L : b.h >= L;
+              if (!reached) dWhy = `MSS confirmed. Limit ${up ? 'buy' : 'sell'} waiting at the new node ${f(L)}.`;
+              else {
+                const ref4 = up ? Math.min(L, b.o) : Math.max(L, b.o); let sl4 = st.low - d * buf, risk4 = d * (ref4 - sl4);
+                if (risk4 < minRisk) { sl4 = ref4 - d * minRisk; risk4 = minRisk; }
+                if (fresh) S._base[d] = null;
+                if (risk4 > maxRisk + 1e-9) dWhy = 'Filled level, but the stop beyond the low is too wide.';
+                else {
+                  const c4s = cands.filter(c => d * (c[0] - ref4) > 0), u1 = c4s.find(c => d * (c[0] - ref4) >= 1.0 * risk4) || null, u2 = u1 ? pickT2(c4s, ref4, risk4, u1) : null;
+                  if (!u2) dWhy = `Filled level, but no target is ${m.minRR}R away.`;
+                  else D4 = { st, L, ref: ref4, sl: sl4, risk: risk4, t1: u1, t2: u2, rr1: d * (u1[0] - ref4) / risk4, rr2: d * (u2[0] - ref4) / risk4 };
+                }
+              }
+            } else dWhy = `MSS confirmed. Limit ${up ? 'buy' : 'sell'} at the new node ${f(st.nh)} from the next bar.`;
+          }
+        }
+      }
       // setup C: price returns to an untouched 15m order block that holds an FRVP level; a limit at that level fills
       let C3 = null;
       if (obk && !fire && !B2 && inHours && !retry && k >= 3) {
@@ -1142,6 +1212,7 @@ const AF = (() => {
       else if (m.htf && !c4Ok) why = c4Text;
       else if (m.bias && verdict !== want) why = tdText;
       else if (m.confirm && S._arm[d] && !confirmed) why = qf.detail;
+      else if (zone && !mtfOk) why = mtfTxt;
       else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at ${m.noPoc ? '' : 'the POC, '}${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
       else if (m.align && !aligned) why = sf.detail;
       else if (m.sweep && !swept) why = `At the ${zone.name}, but ${lf.detail.charAt(0).toLowerCase() + lf.detail.slice(1)}`;
@@ -1159,6 +1230,7 @@ const AF = (() => {
         day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
         delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
         h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against', c4: c4dir === d ? 'with' : c4dir ? 'against' : 'no setup' };
+      if (mtfOk && mtfTxt && zone) zf.detail = zDetail0 + ' ' + mtfTxt;
       tags.setup = 'reversal'; tags.entry = obFill ? 'order block' : m.confirm ? 'retest' : 'CISD';
       if (B2) {
         const g = B2.gap;
@@ -1172,6 +1244,19 @@ const AF = (() => {
         return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: B2.ref, sl: B2.sl, risk: B2.risk, tp1: B2.t1[0], tp1Name: B2.t1[1], tp2: B2.t2[0], tp2Name: B2.t2[1], rr1: B2.rr1, rr2: B2.rr2,
           setup: `FRVP 4H continuation ${up ? 'long' : 'short'}`, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan2, swept: true, bWhy };
       }
+      if (D4) {
+        const st = D4.st;
+        zf.pts = 25; zf.detail = `Price took the ${st.liq} at the ${st.zone} ${f(st.zoneP)}, held above ${f(st.low)} for ${k - st.kLow} bars and built a new ${up ? 'support' : 'resistance'} node at ${f(D4.L)}.`;
+        lf.pts = 20; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken: ${st.liq}.`;
+        tf_.pts = 15; tf_.detail = `Market structure shift: closed ${up ? 'above' : 'below'} the last swing ${f(st.sw)}.`;
+        qf.label = 'Breathing space'; qf.pts = 15; qf.detail = `Limit ${up ? 'buy' : 'sell'} filled at the new node ${f(D4.ref)}; stop beyond the low.`;
+        rf.pts = 10; rf.detail = `TP1 ${D4.t1[1]} ${f(D4.t1[0])} at ${D4.rr1.toFixed(1)}R, TP2 ${D4.t2[1]} ${f(D4.t2[0])} at ${D4.rr2.toFixed(1)}R.`;
+        Object.assign(tags, { setup: 'breathing space + MSS', entry: 'limit at new node', zone: st.zone.replace(/support |resistance /, ''), liq: /previous day/.test(st.liq) ? 'previous day high/low' : 'last 1H high/low', rr1: D4.rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R' });
+        const plan4 = `Liquidity at the ${st.zone}, 30 minutes of holding, a new node at ${f(D4.L)} and an MSS; limit ${up ? 'buy' : 'sell'} at the node. Target ${D4.t2[1]} ${f(D4.t2[0])}.`;
+        return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: D4.ref, sl: D4.sl, risk: D4.risk, tp1: D4.t1[0], tp1Name: D4.t1[1], tp2: D4.t2[0], tp2Name: D4.t2[1], rr1: D4.rr1, rr2: D4.rr2,
+          setup: `FRVP ${st.zone} ${up ? 'long' : 'short'} after breathing space`, limitFill: true, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan4, swept: true, bWhy };
+      }
+      if (m.base && inHours && dWhy) why = dWhy;
       if (C3) {
         const o = C3.o;
         zf.pts = 25; zf.detail = `Price came back to the untouched 15m order block ${f(o.lo)}–${f(o.hi)} that holds the ${C3.lvl[1]} at ${f(C3.lvl[0])}.`;
@@ -3096,7 +3181,7 @@ const AF = (() => {
     if (!v) { out.innerHTML = '<p class="hintp">Pick a date and time first.</p>'; return; }
     const g = histCtx.grid.find(x => x[0] === $('#histPick').value) || histCtx.grid[0];
     const [, tf, mo] = g, t0 = new Date(v).getTime(), a = t0 - 30 * 60000, z = t0 + 90 * 60000;
-    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', ...mo } };
+    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, ...mo } };
     out.innerHTML = '<p class="hintp">Replaying…</p>'; await new Promise(r => setTimeout(r));
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tf * 60000, htfMult: HTF_MULT[tf] });
     Object.assign(T.params, params);
@@ -3194,14 +3279,15 @@ const AF = (() => {
         }
         else for (const tf of [15, 5]) {
           if (tf !== 5) continue;
-          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '' };
+          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false };
           grid.push([`5m · retest + delta agrees`, tf, { ...o }]);
-          grid.push([`5m · + 15m order block with an HVN inside`, tf, { ...o, obz: 'hvn' }]);
-          grid.push([`5m · + 15m order block with any FRVP level inside`, tf, { ...o, obz: 'any' }]);
-          grid.push([`5m · + only 06:00–12:00 UTC`, tf, { ...o, win: 'ldn' }]);
+          grid.push([`5m · breathing space: hold 30 min, new node, MSS, limit at node`, tf, { ...o, base: true }]);
+          grid.push([`5m · breathing space + level confirmed on 30m profile`, tf, { ...o, base: true, mtfLvl: '30' }]);
+          grid.push([`5m · + level confirmed on the 30m profile`, tf, { ...o, mtfLvl: '30' }]);
+          grid.push([`5m · + level confirmed on 15m and 30m profiles`, tf, { ...o, mtfLvl: 'both' }]);
         }
         histCtx = { inst, m1, base, grid };
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -3209,7 +3295,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -3245,7 +3331,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || '';
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base;
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -3258,9 +3344,9 @@ const AF = (() => {
   $('#chkBtn').onclick = () => explainMoment();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = $('#mdMtf').onchange = $('#mdBase').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value, mtfLvl: $('#mdMtf').value, base: $('#mdBase').checked };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
