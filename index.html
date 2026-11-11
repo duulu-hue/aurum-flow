@@ -415,6 +415,9 @@ tr.open td{background:var(--gold-soft)}
         <button class="btn" id="histCsv" type="button">Download trades (CSV)</button>
       </div>
       <p class="hintp" id="histTradesMsg" style="margin-bottom:8px"></p>
+      <div class="frow" style="margin:10px 0 4px"><label for="chkT">Explain a moment</label><input type="datetime-local" id="chkT" style="background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;color:inherit"><button class="btn" id="chkBtn" type="button">Explain</button></div>
+      <p class="hintp">Your local time. Shows, bar by bar from 30 minutes before to 90 minutes after, what the version picked above saw on each side and why it did or did not trade.</p>
+      <div id="chkOut"></div>
       <div id="histBreak"></div>
       <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Quality</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
     </div>
@@ -998,8 +1001,11 @@ const AF = (() => {
       if (m.confirm && fresh && fire === false && confirmed) S._arm[d] = null;
       // setup B, the 4H continuation: while the 4H candle model points this way, price pulls back into a 15m FVG that
       // sits on an FRVP level (POC, HVN, or VAH/VAL) and a displacement candle rejects it. Entry on that candle's close.
-      let B2 = null;
+      let B2 = null, bWhy = null;
+      if (m.cont) bWhy = fire ? 'Setup A fired on this bar.' : c4dir !== d ? (c4dir ? `4H candle model points the other way.` : 'No 4H candle setup is live.') : !inHours ? 'Outside trading hours.' : chop ? 'Choppy around the POC.' : null;
       if (m.cont && !fire && c4dir === d && inHours && !chop && k >= 3) {
+        let best = 0; const why = (lvl, txt) => { if (lvl >= best) { best = lvl; bWhy = txt; } };
+        why(0, `No live 15m ${up ? 'bullish' : 'bearish'} FVG inside candle 2's range that price has pulled back into.`);
         const win = Math.max(4, 2 * m.zoneBars), w0 = Math.max(0, k - win);
         let tExt = up ? Infinity : -Infinity; for (let j = w0; j <= k; j++) tExt = up ? Math.min(tExt, S.bars[j].l) : Math.max(tExt, S.bars[j].h);
         const lv = [[prof.poc, 'POC'], [up ? prof.val : prof.vah, up ? 'VAL' : 'VAH'], ...prof.zones.map(z => [z.price, up ? 'support HVN' : 'resistance HVN'])];
@@ -1008,19 +1014,22 @@ const AF = (() => {
         for (const g of gaps) {
           if (g.done || g.dir !== d || g.t < c4.c1.t || (up ? g.lo < c4.c2.l : g.hi > c4.c2.h)) continue;
           const touched = up ? tExt <= g.hi : tExt >= g.lo; if (!touched) continue;
+          const gtxt = `15m FVG ${f(g.lo)}–${f(g.hi)}`;
           const mid = (g.lo + g.hi) / 2;
           const L = lv.filter(x => x[0] != null && x[0] >= g.lo - 0.5 * atr && x[0] <= g.hi + 0.5 * atr).sort((x, y) => Math.abs(x[0] - mid) - Math.abs(y[0] - mid))[0];
-          if (!L) continue;
+          if (!L) { why(1, `Price is in the ${gtxt}, but no FRVP level (POC, HVN, ${up ? 'VAL' : 'VAH'}) sits on it.`); continue; }
           const edge = up ? Math.max(g.hi, L[0]) : Math.min(g.lo, L[0]);
-          if (!(disp && (up ? b.c > edge && p1.c <= edge : b.c < edge && p1.c >= edge))) continue;
-          if (m.delta && !of.na && !(of.pts > 0)) continue;
+          if (!(disp && (up ? b.c > edge && p1.c <= edge : b.c < edge && p1.c >= edge))) {
+            why(2, `At the ${gtxt} on the ${L[1]} ${f(L[0])}. Waiting for a ${up ? 'bullish' : 'bearish'} displacement close ${up ? 'above' : 'below'} ${f(edge)} (this candle: body ${(body / atr).toFixed(1)} ATR, needs 0.6).`); continue; }
+          if (m.delta && !of.na && !(of.pts > 0)) { why(3, `Displacement printed at the ${gtxt}, but delta does not agree.`); continue; }
           const ref2 = b.c; let sl2 = (up ? Math.min(tExt, g.lo) : Math.max(tExt, g.hi)) - d * buf, risk2 = d * (ref2 - sl2);
           if (risk2 < minRisk) { sl2 = ref2 - d * minRisk; risk2 = minRisk; }
-          if (risk2 > maxRisk + 1e-9) continue;
+          if (risk2 > maxRisk + 1e-9) { why(4, `Displacement printed, but the stop would be ${Math.round(risk2 / S.pip)} pips, too wide.`); continue; }
           const c2s = cands.filter(c => d * (c[0] - ref2) > 0);
           const u1 = c2s.find(c => d * (c[0] - ref2) >= 1.0 * risk2) || null;
           const u2 = u1 ? (c2s.filter(c => d * (c[0] - ref2) >= Math.max(m.minRR * risk2, d * (u1[0] - ref2) + 0.5 * risk2)).pop() || null) : null;
-          if (!u2) continue;
+          if (!u2) { why(4, `Displacement printed, but no level is ${m.minRR}R away for TP2.`); continue; }
+          bWhy = 'Setup B fired.';
           B2 = { gap: g, lvl: L, ref: ref2, sl: sl2, risk: risk2, t1: u1, t2: u2, rr1: d * (u1[0] - ref2) / risk2, rr2: d * (u2[0] - ref2) / risk2 };
           break;
         }
@@ -1070,10 +1079,10 @@ const AF = (() => {
         Object.assign(tags, { setup: '4H continuation', liq: '4H candle 2', zone: B2.lvl[1].replace(/support |resistance /, ''), rr1: B2.rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R' });
         const plan2 = `4H candle model ${up ? 'bullish' : 'bearish'}, pullback into the 15m FVG on the ${B2.lvl[1]}, then a ${up ? 'bullish' : 'bearish'} displacement. Target ${B2.t2[1]} ${f(B2.t2[0])}.`;
         return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: B2.ref, sl: B2.sl, risk: B2.risk, tp1: B2.t1[0], tp1Name: B2.t1[1], tp2: B2.t2[0], tp2Name: B2.t2[1], rr1: B2.rr1, rr2: B2.rr2,
-          setup: `FRVP 4H continuation ${up ? 'long' : 'short'}`, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan2, swept: true };
+          setup: `FRVP 4H continuation ${up ? 'long' : 'short'}`, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan2, swept: true, bWhy };
       }
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
-        setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
+        setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, bWhy, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
     let pick = null; for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
@@ -2966,6 +2975,31 @@ const AF = (() => {
     }
     return out;
   }
+  // explain what the engine saw around one moment, bar by bar, for the version picked in Trades to review
+  let histCtx = null;
+  async function explainMoment() {
+    const out = $('#chkOut'), v = $('#chkT').value;
+    if (!histCtx) { out.innerHTML = '<p class="hintp">Run the history test first.</p>'; return; }
+    if (!v) { out.innerHTML = '<p class="hintp">Pick a date and time first.</p>'; return; }
+    const g = histCtx.grid.find(x => x[0] === $('#histPick').value) || histCtx.grid[0];
+    const [, tf, mo] = g, t0 = new Date(v).getTime(), a = t0 - 30 * 60000, z = t0 + 90 * 60000;
+    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, ...mo } };
+    out.innerHTML = '<p class="hintp">Replaying…</p>'; await new Promise(r => setTimeout(r));
+    const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tf * 60000, htfMult: HTF_MULT[tf] });
+    Object.assign(T.params, params);
+    const rows = [];
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i]; if (b.t > z) break;
+      const busy = !!T.active;
+      AF.closeBar(T, b);
+      if (b.t + T.interval < a) continue;
+      const e = T.lastEval, c = s => s.fire ? `<b class="${s.dir > 0 ? 'up' : 'down'}">${s.dir > 0 ? 'BUY' : 'SELL'} fired: ${esc(s.setup)}</b>` : esc(s.why || 'No setup.');
+      const cb = s => params.model.cont ? `<br><span class="muted">4H continuation: ${esc(s.bWhy || '–')}</span>` : '';
+      rows.push(`<tr><td>${localTime(b.t + T.interval)}</td><td class="num">${b.c.toFixed(T.dec)}</td><td>${busy ? '<span class="muted">A trade was already open. </span>' : ''}${c(e.long)}${cb(e.long)}</td><td>${c(e.short)}${cb(e.short)}</td></tr>`);
+    }
+    const c4 = T.lastEval && T.lastEval.c4Text;
+    out.innerHTML = rows.length ? `<p class="hintp" style="margin:8px 0">${esc(g[0])}. Each row is a ${tf}m bar close. ${c4 ? esc(c4) : ''}</p><div class="tablewrap"><table class="tl"><thead><tr><th>Bar close</th><th class="num">Price</th><th>Long side</th><th>Short side</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>` : '<p class="hintp">That time is outside the tested period.</p>';
+  }
   async function runVariant(inst, bars, params, say, label, days, tfMin, splitT) {
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tfMin * 60000, htfMult: HTF_MULT[tfMin] });
     Object.assign(T.params, params);
@@ -3051,6 +3085,7 @@ const AF = (() => {
           grid.push([`${tf}m · retest + delta agrees`, tf, { ...o }]);
           grid.push([`${tf}m · retest + delta + 4H continuation setup`, tf, { ...o, cont: true }]);
         }
+        histCtx = { inst, m1, base, grid };
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
@@ -3105,6 +3140,7 @@ const AF = (() => {
   $('#thr').oninput = e => { const v = +e.target.value; cc().threshold = v; $('#thrv').textContent = v; saveCfg(); for (const i of insts) if (i.S && classOf(i.def) === curCls()) i.S.params.threshold = v; if (S) S.lastEval = reEval(); panelDirty = true; };
   $('#lookback').onchange = e => { cc().lookback = +e.target.value; saveCfg(); for (const i of insts) if (i.S && classOf(i.def) === curCls()) i.S.params.lookback = +e.target.value; if (S) S.lastEval = reEval(); profCache.key = ''; panelDirty = dirty = true; };
   $('#rerun').onclick = () => rebuildAll();
+  $('#chkBtn').onclick = () => explainMoment();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
   $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = () => {
