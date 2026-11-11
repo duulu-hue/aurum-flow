@@ -644,11 +644,11 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4 };
+  const MODEL_DEFAULTS = { dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
-    const m = modelOpts(S), o = { ...frvpOpts(S), sessStart: m.dayStart, sessEnd: m.dayStart };
+    const m = modelOpts(S), o = { ...frvpOpts(S), sessStart: m.dayStart, sessEnd: m.dayStart, tpo: !!m.tpo };
     const sr = sessionRanges(S, k, o);
     return { idx: sr.prev.concat(sr.today), prev: sr.prev, today: sr.today, o };
   }
@@ -1268,7 +1268,7 @@ const AF = (() => {
     const dec = Math.max(0, Math.round(-Math.log10(pip))) + 1;
     const rng = median(rows.map(r => r.h - r.l)) || pip * 10;
     const bin = Math.max(pip, niceNum(rng / 6));
-    const htfMult = interval <= 60000 ? 15 : interval <= 300000 ? 3 : 4;
+    const htfMult = interval <= 60000 ? 15 : interval <= 180000 ? 20 : interval <= 300000 ? 12 : interval <= 900000 ? 16 : 4;
     const S = createStore({ mode: 'csv', symbol: name || 'CSV', bin, pip, dec, interval, htfMult });
     for (const r of rows) {
       const tp = (r.h + r.l + r.c) / 3, rg = r.h - r.l, loc = rg > 0 ? (r.c - r.l) / rg : 0.5;
@@ -2512,9 +2512,10 @@ const AF = (() => {
   }
   function renderJournal() {
     if (!live) {
-      const st = AF.stats(S);
-      $('#notice').textContent = `Backtest on your file: ${S.bars.length} bars of ${S.tfLabel} data. The order-book factor is excluded and delta is estimated. Past results do not predict future results.`;
-      return renderTable({ ...st }, S.trades.slice().reverse().map(t => ({ ...t, label: S.symbol, dec: S.dec, open: t.result === null, rNow: t.result === null ? AF.liveR(S, lastPrice()) : t.result, unitsNow: t.pips })));
+      const cp = S.params.costPrice || 0, net = t => t.result - cp / t.risk;
+      const st = ledgerStats(S.trades.filter(t => t.result !== null).map(t => ({ result: net(t) })));
+      $('#notice').textContent = `Backtest on your file: ${S.bars.length} bars of ${S.tfLabel} data (higher timeframe ${S.htfLabel}), ${S.params.strategy === 'frvp' ? 'your FRVP model' : 'the value-edge engine'}, profile weighted by the file's volume column. Results subtract ${Math.round(cp / S.pip * 10) / 10} pips of costs per trade. Times are read as UTC. Past results do not predict future results.`;
+      return renderTable(st, S.trades.slice().reverse().map(t => ({ ...t, label: S.symbol, dec: S.dec, open: t.result === null, rNow: t.result === null ? AF.liveR(S, lastPrice()) : net(t), unitsNow: t.result === null ? null : net(t) * t.risk / S.pip })));
     }
     renderJournalFilter();
     const f = $('#jMarket').value, rows = ledger.filter(t => f === 'all' || t.mk === f), closed = rows.filter(x => x.result !== null), st = ledgerStats(closed);
@@ -2697,6 +2698,7 @@ const AF = (() => {
           grid.push([`${tf}m · liquidity required`, tf, { sweep: true, delta: false }]);
           grid.push([`${tf}m · no liquidity rule`, tf, { sweep: false, delta: false }]);
           if (flow) grid.push([`${tf}m · liquidity + delta agrees`, tf, { sweep: true, delta: true }]);
+          if (flow) grid.push([`${tf}m · liquidity · time-based profile`, tf, { sweep: true, delta: false, tpo: true }]);
         }
         for (const [name, tf, mo] of grid) res.push([name, { tf, ...mo }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...mo } }, say, name, days, tf, splitT)]);
       } else for (const tf of [1, 3, 5, 15]) {
@@ -2706,7 +2708,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === cfg.tf && v.sweep === base.model.sweep && v.delta === base.model.delta) : (v.tf === cfg.tf && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === cfg.tf && v.sweep === base.model.sweep && v.delta === base.model.delta && !v.tpo) : (v.tf === cfg.tf && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
