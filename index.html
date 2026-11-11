@@ -350,6 +350,7 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdAlign" style="accent-color:var(--gold)"> Trade with 15m &amp; 1H structure</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdConfirm" style="accent-color:var(--gold)"> Wait for a retest that holds</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdNoPoc" style="accent-color:var(--gold)"> Skip POC entries</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdCont" style="accent-color:var(--gold)"> Also take 4H continuation setups</label>
           <label style="display:flex;align-items:center;gap:6px">4H candle model <select id="mdHtf"><option value="">off</option><option value="block">no trades against it</option><option value="only">only trade with it</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Top-down <select id="mdBias"><option value="">off</option><option value="both">4H &amp; 1H agree</option><option value="h4">4H only</option></select></label>
           <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
@@ -423,6 +424,7 @@ tr.open td{background:var(--gold-soft)}
       <section>
         <h4>Your FRVP model: structure, retest and quality</h4>
         <p><b>Trade with 15m &amp; 1H structure</b>: longs only when the last swing high was broken on both 15m and 1H (shorts: last swing low). <b>Wait for a retest that holds</b>: after the setup prints, the engine waits up to two hours for price to come back to the zone and close rejected, without a new extreme beyond the sweep; it enters on that close, with the stop beyond the sweep. If price breaks the sweep first, the setup is cancelled.</p>
+        <p><b>4H continuation setup</b> (added next to your reversal setup, which stays unchanged): while the 4H candle model points one way, price pulls back into a 15m fair value gap that sits on an FRVP level (POC, HVN, VAH or VAL), and a displacement candle (body at least 0.6 ATR, closing near its extreme) rejects the zone. Entry on that close, stop beyond the pullback high or low, targets the next FRVP levels and the far end of 4H candle 1, minimum reward to TP2 as set.</p>
         <p><b>4H candle model</b>: 4H candles start at 22:00 UTC like your broker. When candle 2 takes candle 1's high and closes back inside, the side is short until price reaches candle 1's low; when it takes the low and closes back inside, the side is long until candle 1's high. The setup ends if price trades beyond candle 2's extreme or after three more 4H candles. "No trades against it" blocks the counter-trend side; "only trade with it" trades only while a setup is live and counts candle 2's sweep as the liquidity, with candle 1's far end as a target.</p>
         <p><b>Top-down (forex plan)</b>: before any setup the engine reads 4H and 1H structure. "4H &amp; 1H agree": both up means longs only, both down shorts only, anything else is mixed and it stands aside. "4H only": the 4H sets the side and 1H pullbacks against it are allowed, which is where liquidity sweeps happen. "Skip POC entries" leaves out the POC, the middle of value where price rotates, and keeps only value edges and HVNs.</p>
         <p><b>Setup quality</b> starts at 50 and adds only what helped on both gold and silver in the 90-day test: delta agrees with the trade (+15), zone not stacked on another level (+10), zone is not the POC (+10), London hours 06:00–12:00 UTC (+10). 80+ is A+, 65–79 is A. The History test shows how each band actually performed.</p>
@@ -689,7 +691,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -855,6 +857,32 @@ const AF = (() => {
     c.upto = Math.max(c.upto, k);
     return c.set;
   }
+  // 15-minute fair value gaps built from the entry bars. A bearish gap: candle 3's high is below candle 1's low.
+  // A gap is spent once an entry bar closes beyond its far side.
+  function fvg15(S, k) {
+    const ms = 15 * 60000;
+    let c = S._fvg;
+    if (!c || c.upto > k) c = S._fvg = { upto: -1, cur: null, bars: [], gaps: [] };
+    const fin = () => {
+      const B = c.bars; B.push(c.cur); c.cur = null; const n = B.length;
+      if (n >= 3) {
+        const a = B[n - 3], z = B[n - 1];
+        if (a.l > z.h) c.gaps.push({ dir: -1, lo: z.h, hi: a.l, t: B[n - 2].t, done: false });
+        if (a.h < z.l) c.gaps.push({ dir: 1, lo: a.h, hi: z.l, t: B[n - 2].t, done: false });
+        if (c.gaps.length > 60) c.gaps.splice(0, c.gaps.length - 60);
+      }
+      if (B.length > 10) B.splice(0, B.length - 10);
+    };
+    for (let j = c.upto + 1; j <= k; j++) {
+      const b = S.bars[j], key = Math.floor(b.t / ms);
+      if (c.cur && c.cur.key !== key) fin();
+      for (const g of c.gaps) if (!g.done && (g.dir < 0 ? b.c > g.hi : b.c < g.lo)) g.done = true;
+      if (!c.cur) c.cur = { key, t: key * ms, o: b.o, h: b.h, l: b.l, c: b.c }; else { if (b.h > c.cur.h) c.cur.h = b.h; if (b.l < c.cur.l) c.cur.l = b.l; c.cur.c = b.c; }
+      if (b.t + S.interval >= (key + 1) * ms) fin();
+    }
+    c.upto = Math.max(c.upto, k);
+    return c.gaps;
+  }
   function modelEval(S, k) {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), m = modelOpts(S), f = x => x.toFixed(S.dec);
     const prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
@@ -865,7 +893,7 @@ const AF = (() => {
     const chop = m.chop && crosses >= 5;
     const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
     const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60), s240 = mtfTrend(S, k, 240);
-    const c4 = crt4h(S, k), c4dir = c4 ? c4.dir : 0, fx = x => x.toFixed(S.dec);
+    const c4 = crt4h(S, k), c4dir = c4 ? c4.dir : 0, fx = x => x.toFixed(S.dec), gaps = m.cont ? fvg15(S, k) : [];
     const c4Text = c4 ? (c4.dir < 0 ? `4H candle model is bearish: candle 2 took candle 1's high at ${fx(c4.c1.h)} and closed back inside. Shorts only, target ${fx(c4.c1.l)}.`
       : `4H candle model is bullish: candle 2 took candle 1's low at ${fx(c4.c1.l)} and closed back inside. Longs only, target ${fx(c4.c1.h)}.`)
       : 'No 4H candle setup: waiting for a 4H candle to take the previous 4H high or low and close back inside.';
@@ -968,6 +996,35 @@ const AF = (() => {
       const fire = inHours && ready && roomOk;
       if (m.confirm && confirmed && fresh) { if (fire) S._arm[d] = Object.assign(S._arm[d] || {}, { firedK: k }); else S._arm[d] = null; }
       if (m.confirm && fresh && fire === false && confirmed) S._arm[d] = null;
+      // setup B, the 4H continuation: while the 4H candle model points this way, price pulls back into a 15m FVG that
+      // sits on an FRVP level (POC, HVN, or VAH/VAL) and a displacement candle rejects it. Entry on that candle's close.
+      let B2 = null;
+      if (m.cont && !fire && c4dir === d && inHours && !chop && k >= 3) {
+        const win = Math.max(4, 2 * m.zoneBars), w0 = Math.max(0, k - win);
+        let tExt = up ? Infinity : -Infinity; for (let j = w0; j <= k; j++) tExt = up ? Math.min(tExt, S.bars[j].l) : Math.max(tExt, S.bars[j].h);
+        const lv = [[prof.poc, 'POC'], [up ? prof.val : prof.vah, up ? 'VAL' : 'VAH'], ...prof.zones.map(z => [z.price, up ? 'support HVN' : 'resistance HVN'])];
+        const body = d * (b.c - b.o), rngB = Math.max(b.h - b.l, 1e-12), p1 = S.bars[k - 1];
+        const disp = body >= 0.6 * atr && (up ? b.h - b.c : b.c - b.l) <= 0.3 * rngB;
+        for (const g of gaps) {
+          if (g.done || g.dir !== d || g.t < c4.c1.t || (up ? g.lo < c4.c2.l : g.hi > c4.c2.h)) continue;
+          const touched = up ? tExt <= g.hi : tExt >= g.lo; if (!touched) continue;
+          const mid = (g.lo + g.hi) / 2;
+          const L = lv.filter(x => x[0] != null && x[0] >= g.lo - 0.5 * atr && x[0] <= g.hi + 0.5 * atr).sort((x, y) => Math.abs(x[0] - mid) - Math.abs(y[0] - mid))[0];
+          if (!L) continue;
+          const edge = up ? Math.max(g.hi, L[0]) : Math.min(g.lo, L[0]);
+          if (!(disp && (up ? b.c > edge && p1.c <= edge : b.c < edge && p1.c >= edge))) continue;
+          if (m.delta && !of.na && !(of.pts > 0)) continue;
+          const ref2 = b.c; let sl2 = (up ? Math.min(tExt, g.lo) : Math.max(tExt, g.hi)) - d * buf, risk2 = d * (ref2 - sl2);
+          if (risk2 < minRisk) { sl2 = ref2 - d * minRisk; risk2 = minRisk; }
+          if (risk2 > maxRisk + 1e-9) continue;
+          const c2s = cands.filter(c => d * (c[0] - ref2) > 0);
+          const u1 = c2s.find(c => d * (c[0] - ref2) >= 1.0 * risk2) || null;
+          const u2 = u1 ? (c2s.filter(c => d * (c[0] - ref2) >= Math.max(m.minRR * risk2, d * (u1[0] - ref2) + 0.5 * risk2)).pop() || null) : null;
+          if (!u2) continue;
+          B2 = { gap: g, lvl: L, ref: ref2, sl: sl2, risk: risk2, t1: u1, t2: u2, rr1: d * (u1[0] - ref2) / risk2, rr2: d * (u2[0] - ref2) / risk2 };
+          break;
+        }
+      }
       // setup quality, 0–100: what you weigh when deciding how much you like a trade
       const armed = S._arm[d] && S._arm[d].firedK === k ? S._arm[d] : null;
       const liqName = armed ? armed.liq : swept ? swept.name : null, zName = armed ? armed.zone : zone ? zone.name : null, zP = armed ? armed.zoneP : zone ? zone.price : null;
@@ -1002,6 +1059,19 @@ const AF = (() => {
         day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
         delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
         h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against', c4: c4dir === d ? 'with' : c4dir ? 'against' : 'no setup' };
+      tags.setup = 'reversal';
+      if (B2) {
+        const g = B2.gap;
+        zf.pts = 25; zf.detail = `Price pulled back ${up ? 'down' : 'up'} into the 15m FVG ${f(g.lo)}–${f(g.hi)} on the ${B2.lvl[1]} at ${f(B2.lvl[0])}.`;
+        lf.pts = 20; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken on the 4H at ${f(up ? c4.c1.l : c4.c1.h)}.`;
+        tf_.pts = 15; tf_.detail = `${up ? 'Bullish' : 'Bearish'} displacement: a ${S.tfLabel} candle with a body of ${(d * (b.c - b.o) / atr).toFixed(1)} ATR closed ${up ? 'above' : 'below'} the zone.`;
+        sf.label = '4H candle model'; sf.na = false; sf.pts = 15; sf.detail = c4Text; qf.na = true; qf.detail = 'Continuation setup: entry on the displacement candle.';
+        rf.pts = 10; rf.detail = `TP1 ${B2.t1[1]} ${f(B2.t1[0])} at ${B2.rr1.toFixed(1)}R, TP2 ${B2.t2[1]} ${f(B2.t2[0])} at ${B2.rr2.toFixed(1)}R.`;
+        Object.assign(tags, { setup: '4H continuation', liq: '4H candle 2', zone: B2.lvl[1].replace(/support |resistance /, ''), rr1: B2.rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R' });
+        const plan2 = `4H candle model ${up ? 'bullish' : 'bearish'}, pullback into the 15m FVG on the ${B2.lvl[1]}, then a ${up ? 'bullish' : 'bearish'} displacement. Target ${B2.t2[1]} ${f(B2.t2[0])}.`;
+        return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: B2.ref, sl: B2.sl, risk: B2.risk, tp1: B2.t1[0], tp1Name: B2.t1[1], tp2: B2.t2[0], tp2Name: B2.t2[1], rr1: B2.rr1, rr2: B2.rr2,
+          setup: `FRVP 4H continuation ${up ? 'long' : 'short'}`, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan2, swept: true };
+      }
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
         setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
@@ -2933,7 +3003,7 @@ const AF = (() => {
     const withTags = list.filter(t => t.tags); if (!withTags.length) { $('#histBreak').innerHTML = ''; return; }
     const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
     const groups = [
-      ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
+      ['Setup', t => t.tags.setup], ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
       ['Session', sess], ['4H candle model', t => t.tags.c4], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
       ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
     ];
@@ -2976,14 +3046,12 @@ const AF = (() => {
           grid.push([`${tf}m · 4H only + no POC + retest`, tf, { ...o, noPoc: true, bias: 'h4', confirm: true }]);
         }
         else for (const tf of [15, 5]) {
-          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '' };
+          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false };
           grid.push([`${tf}m · v1 current rules`, tf, { ...o, delta: false, confirm: false }]);
           grid.push([`${tf}m · retest + delta agrees`, tf, { ...o }]);
-          grid.push([`${tf}m · + no trades against 4H candle model`, tf, { ...o, htf: 'block' }]);
-          grid.push([`${tf}m · 4H candle model only, retest + delta`, tf, { ...o, htf: 'only' }]);
-          grid.push([`${tf}m · 4H candle model only, rejection entry + delta`, tf, { ...o, htf: 'only', confirm: false }]);
+          grid.push([`${tf}m · retest + delta + 4H continuation setup`, tf, { ...o, cont: true }]);
         }
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -2991,7 +3059,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -3027,7 +3095,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || '';
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont;
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -3039,9 +3107,9 @@ const AF = (() => {
   $('#rerun').onclick = () => rebuildAll();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
