@@ -350,6 +350,7 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdAlign" style="accent-color:var(--gold)"> Trade with 15m &amp; 1H structure</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdConfirm" style="accent-color:var(--gold)"> Wait for a retest that holds</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdNoPoc" style="accent-color:var(--gold)"> Skip POC entries</label>
+          <label style="display:flex;align-items:center;gap:6px">4H candle model <select id="mdHtf"><option value="">off</option><option value="block">no trades against it</option><option value="only">only trade with it</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Top-down <select id="mdBias"><option value="">off</option><option value="both">4H &amp; 1H agree</option><option value="h4">4H only</option></select></label>
           <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
         </div>
@@ -422,6 +423,7 @@ tr.open td{background:var(--gold-soft)}
       <section>
         <h4>Your FRVP model: structure, retest and quality</h4>
         <p><b>Trade with 15m &amp; 1H structure</b>: longs only when the last swing high was broken on both 15m and 1H (shorts: last swing low). <b>Wait for a retest that holds</b>: after the setup prints, the engine waits up to two hours for price to come back to the zone and close rejected, without a new extreme beyond the sweep; it enters on that close, with the stop beyond the sweep. If price breaks the sweep first, the setup is cancelled.</p>
+        <p><b>4H candle model</b>: 4H candles start at 22:00 UTC like your broker. When candle 2 takes candle 1's high and closes back inside, the side is short until price reaches candle 1's low; when it takes the low and closes back inside, the side is long until candle 1's high. The setup ends if price trades beyond candle 2's extreme or after three more 4H candles. "No trades against it" blocks the counter-trend side; "only trade with it" trades only while a setup is live and counts candle 2's sweep as the liquidity, with candle 1's far end as a target.</p>
         <p><b>Top-down (forex plan)</b>: before any setup the engine reads 4H and 1H structure. "4H &amp; 1H agree": both up means longs only, both down shorts only, anything else is mixed and it stands aside. "4H only": the 4H sets the side and 1H pullbacks against it are allowed, which is where liquidity sweeps happen. "Skip POC entries" leaves out the POC, the middle of value where price rotates, and keeps only value edges and HVNs.</p>
         <p><b>Setup quality</b> starts at 50 and adds only what helped on both gold and silver in the 90-day test: delta agrees with the trade (+15), zone not stacked on another level (+10), zone is not the POC (+10), London hours 06:00–12:00 UTC (+10). 80+ is A+, 65–79 is A. The History test shows how each band actually performed.</p>
       </section>
@@ -687,7 +689,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '' };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -821,6 +823,38 @@ const AF = (() => {
     c.upto = Math.max(c.upto, k);
     return c.trend;
   }
+  // the user's 4H candle model: candle 2 takes candle 1's high (low) and closes back inside candle 1's range.
+  // That sets the side (short after a high is taken, long after a low is taken) until price reaches the other
+  // end of candle 1 (target), trades beyond candle 2's extreme (failed) or three more 4H candles pass.
+  // 4H candles start at the broker's day start (22:00 UTC), like the broker's chart.
+  function crt4h(S, k) {
+    const ms = 4 * 3600e3, off = modelOpts(S).dayStart * 60000;
+    let c = S._crt;
+    if (!c || c.upto > k) c = S._crt = { upto: -1, cur: null, bars: [], set: null };
+    const fin = () => {
+      const B = c.bars; B.push(c.cur); c.cur = null; const n = B.length;
+      if (c.set && n - c.set.n >= 3) c.set = null;
+      if (n >= 2) {
+        const c1 = B[n - 2], c2 = B[n - 1];
+        const bear = c2.h > c1.h && c2.c < c1.h && c2.c > c1.l, bull = c2.l < c1.l && c2.c > c1.l && c2.c < c1.h;
+        if (bear !== bull) c.set = { dir: bear ? -1 : 1, c1: { h: c1.h, l: c1.l, t: c1.t }, c2: { h: c2.h, l: c2.l, t: c2.t }, n };
+      }
+      if (B.length > 60) B.splice(0, B.length - 60);
+    };
+    for (let j = c.upto + 1; j <= k; j++) {
+      const b = S.bars[j], key = Math.floor((b.t - off) / ms);
+      if (c.cur && c.cur.key !== key) fin();
+      if (c.set) {
+        const z = c.set;
+        if (z.dir < 0 ? b.h > z.c2.h : b.l < z.c2.l) c.set = null;
+        else if (z.dir < 0 ? b.l <= z.c1.l : b.h >= z.c1.h) c.set = null;
+      }
+      if (!c.cur) c.cur = { key, t: key * ms + off, o: b.o, h: b.h, l: b.l, c: b.c }; else { if (b.h > c.cur.h) c.cur.h = b.h; if (b.l < c.cur.l) c.cur.l = b.l; c.cur.c = b.c; }
+      if (b.t + S.interval >= (key + 1) * ms + off) fin();
+    }
+    c.upto = Math.max(c.upto, k);
+    return c.set;
+  }
   function modelEval(S, k) {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), m = modelOpts(S), f = x => x.toFixed(S.dec);
     const prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
@@ -831,6 +865,10 @@ const AF = (() => {
     const chop = m.chop && crosses >= 5;
     const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
     const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60), s240 = mtfTrend(S, k, 240);
+    const c4 = crt4h(S, k), c4dir = c4 ? c4.dir : 0, fx = x => x.toFixed(S.dec);
+    const c4Text = c4 ? (c4.dir < 0 ? `4H candle model is bearish: candle 2 took candle 1's high at ${fx(c4.c1.h)} and closed back inside. Shorts only, target ${fx(c4.c1.l)}.`
+      : `4H candle model is bullish: candle 2 took candle 1's low at ${fx(c4.c1.l)} and closed back inside. Longs only, target ${fx(c4.c1.h)}.`)
+      : 'No 4H candle setup: waiting for a 4H candle to take the previous 4H high or low and close back inside.';
     // top-down verdict: the 4H and 1H must point the same way, otherwise the pair is mixed and the model stands aside
     // bias 'h4' reads the 4H alone (pullbacks against the 1H are allowed); any other truthy value needs 4H and 1H to agree
     const h4only = m.bias === 'h4', verdict = h4only ? s240 : (s240 !== 'none' && s240 === s60 ? s240 : 'none');
@@ -865,6 +903,8 @@ const AF = (() => {
       let swept = null, sweepExt = up ? Infinity : -Infinity;
       for (let j = Math.max(0, k - m.sweepBars + 1); j <= k; j++) sweepExt = up ? Math.min(sweepExt, S.bars[j].l) : Math.max(sweepExt, S.bars[j].h);
       for (const [lvl, name] of liqs) if ((up ? sweepExt < lvl && b.c > lvl : sweepExt > lvl && b.c < lvl) && !swept) swept = { lvl, name };
+      // with the 4H candle model, the 4H sweep by candle 2 is the liquidity
+      if (!swept && m.htf === 'only' && c4dir === d) swept = { lvl: up ? c4.c1.l : c4.c1.h, name: `4H candle 1 ${up ? 'low' : 'high'} (taken by candle 2)` };
       if (swept) { lf.pts = 20; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken: price ran the ${swept.name} at ${f(swept.lvl)} and came back ${up ? 'above' : 'below'} it.`; }
       else lf.detail = `No ${up ? 'sell' : 'buy'}-side sweep yet. Watching the ${liqs.map(x => `${x[1]} ${f(x[0])}`).join(', ') || 'previous day and recent candle levels'}.`;
       const cl = cisd(S, k, d);
@@ -880,7 +920,7 @@ const AF = (() => {
         of.pts = ok ? 10 : 0; of.detail = `Delta on this bar ${S.delta[k] >= 0 ? '+' : ''}${Math.round(S.delta[k])}, last 4 bars ${d4 >= 0 ? '+' : ''}${Math.round(d4)}: ${ok ? 'agrees' : 'does not agree'} with the ${up ? 'long' : 'short'}.`;
       } else { of.na = true; of.detail = 'No traded volume on this feed.'; }
       if (chop) cf.detail = `Choppy: price crossed the POC ${crosses} times in the last 16 bars.`; else { cf.pts = 10; cf.detail = `Not choppy: ${crosses} POC crosses in the last 16 bars.`; }
-      const flowOk = !m.delta || of.na || of.pts > 0, alignOk = (!m.align || aligned) && (!m.bias || verdict === want);
+      const flowOk = !m.delta || of.na || of.pts > 0, c4Ok = !m.htf || (m.htf === 'only' ? c4dir === d : c4dir !== -d), alignOk = (!m.align || aligned) && (!m.bias || verdict === want) && c4Ok;
       // with the retest on, delta is judged on the retest bar (the entry), not on the setup bar
       const trigger = !chop && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
 
@@ -899,7 +939,8 @@ const AF = (() => {
         else qf.detail = 'Needs a setup first, then a rejected retest of its zone.';
       } else { qf.na = true; qf.detail = 'Switched off: entries are taken on the CISD.'; if (trigger) { entry = b.c; beyond = up ? Math.min(sweepExt, zone ? zone.lo : Infinity, ext) : Math.max(sweepExt, zone ? zone.hi : -Infinity, ext); } }
       if (!m.align) { sf.na = !aligned; if (sf.na) sf.detail += ' (not required)'; }
-      if (m.bias) { sf.label = h4only ? 'Top-down 4H' : 'Top-down 4H & 1H'; sf.na = false; sf.pts = verdict === want ? 15 : 0; sf.detail = tdText; }
+      if (m.htf) { sf.label = '4H candle model'; sf.na = false; sf.pts = c4dir === d ? 15 : 0; sf.detail = c4Text; }
+      else if (m.bias) { sf.label = h4only ? 'Top-down 4H' : 'Top-down 4H & 1H'; sf.na = false; sf.pts = verdict === want ? 15 : 0; sf.detail = tdText; }
       const ref = entry != null ? entry : b.c;
       const buf = Math.max(0.1 * hAtr, 2 * S.pip);
       let sl = (beyond != null ? beyond : (up ? Math.min(sweepExt, ext) : Math.max(sweepExt, ext))) - d * buf, risk = d * (ref - sl);
@@ -908,7 +949,7 @@ const AF = (() => {
       const cands = [];
       const add = (p, n) => { if (p != null && isFinite(p) && d * (p - ref) > 0) cands.push([p, n]); };
       add(prof.poc, 'POC'); add(up ? prof.vah : prof.val, up ? 'VAH' : 'VAL'); for (const z of prof.zones) add(z.price, up ? 'resistance HVN' : 'support HVN');
-      add(up ? pdh : pdl, up ? 'previous day high' : 'previous day low'); add(up ? prof.high : prof.low, up ? 'profile high' : 'profile low');
+      add(up ? pdh : pdl, up ? 'previous day high' : 'previous day low'); if (c4dir === d) add(up ? c4.c1.h : c4.c1.l, up ? '4H candle 1 high' : '4H candle 1 low'); add(up ? prof.high : prof.low, up ? 'profile high' : 'profile low');
       cands.sort((x, y) => d * (x[0] - y[0]));
       const t1 = cands.find(c => d * (c[0] - ref) >= 1.0 * risk) || null;
       const t2 = t1 ? (cands.filter(c => d * (c[0] - ref) >= Math.max(m.minRR * risk, d * (t1[0] - ref) + 0.5 * risk)).pop() || null) : null;
@@ -941,6 +982,7 @@ const AF = (() => {
       const factors = [zf, lf, tf_, sf, qf, of, cf, rf];
       let why = null;
       if (!inHours) why = null; else if (chop) why = cf.detail + ' The model does not trade chop.';
+      else if (m.htf && !c4Ok) why = c4Text;
       else if (m.bias && verdict !== want) why = tdText;
       else if (m.confirm && S._arm[d] && !confirmed) why = qf.detail;
       else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at ${m.noPoc ? '' : 'the POC, '}${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
@@ -959,14 +1001,14 @@ const AF = (() => {
         h1: s60 === want ? 'with' : s60 === 'none' ? 'undecided' : 'against', m15: s15 === want ? 'with' : s15 === 'none' ? 'undecided' : 'against',
         day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
         delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
-        h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against' };
+        h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against', c4: c4dir === d ? 'with' : c4dir ? 'against' : 'no setup' };
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
         setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
     let pick = null; for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
     if (pick && m.confirm) S._arm[pick.dir] = null;
-    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60, s240, verdict, tdText };
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60, s240, verdict, tdText, c4, c4Text };
   }
 
   function sideEval(ctx, d) {
@@ -1409,7 +1451,7 @@ const AF = (() => {
     return S;
   }
 
-  return { TPB, inWindow, modelOpts, MODEL_DEFAULTS, twoDay, createStore, closeBar, evaluate, frvp, frvpOpts, engineProfile, sessionRanges, sessionOf, FRVP_DEFAULTS, persistence, stats, rebuild, liveR, createSim, simStore, simWarmup, simStartBar, simTick, simEndBar, bookSnapshot, parseCSV, csvStore, intervalLabel };
+  return { TPB, inWindow, crt4h, modelOpts, MODEL_DEFAULTS, twoDay, createStore, closeBar, evaluate, frvp, frvpOpts, engineProfile, sessionRanges, sessionOf, FRVP_DEFAULTS, persistence, stats, rebuild, liveR, createSim, simStore, simWarmup, simStartBar, simTick, simEndBar, bookSnapshot, parseCSV, csvStore, intervalLabel };
 })();
 
 
@@ -1937,7 +1979,7 @@ const AF = (() => {
       [`${S.tfLabel} structure`, st(S.ltf)],
       ['Value area', `${fmt(p.val)} · <span style="color:${C.gold}">${fmt(p.poc)}</span> · ${fmt(p.vah)}`],
       ['FRVP zones', (() => { const z = (e.prof.zones || []), px = price, s = z.filter(q => q.price < px).sort((a, b) => b.price - a.price)[0], r = z.filter(q => q.price >= px).sort((a, b) => a.price - b.price)[0]; return z.length ? `<span class="up">${s ? fmt(s.price) : '–'}</span> · <span class="down">${r ? fmt(r.price) : '–'}</span>` : '<span class="muted">none</span>'; })()],
-      ...(e.model ? [...(S.htfLabel === '4H' ? [] : [['4H structure', st({ trend: e.s240 })]]), ['Top-down verdict', e.verdict === 'up' ? '<span class="up">Longs only</span>' : e.verdict === 'down' ? '<span class="down">Shorts only</span>' : '<span class="muted">Mixed, no trade</span>']] : []),
+      ...(e.model ? [...(S.htfLabel === '4H' ? [] : [['4H structure', st({ trend: e.s240 })]]), ['4H candle model', e.c4 ? (e.c4.dir < 0 ? `<span class="down">Bearish</span> · target ${fmt(e.c4.c1.l)}` : `<span class="up">Bullish</span> · target ${fmt(e.c4.c1.h)}`) : '<span class="muted">No setup</span>'], ['Top-down verdict', e.verdict === 'up' ? '<span class="up">Longs only</span>' : e.verdict === 'down' ? '<span class="down">Shorts only</span>' : '<span class="muted">Mixed, no trade</span>']] : []),
       ...(e.model ? [['Prev. day H / L', `${e.pdh != null ? fmt(e.pdh) : '–'} / ${e.pdl != null ? fmt(e.pdl) : '–'}`]] : []),
       ['Day type', e.rg ? (e.rg.kind === 'up' ? '<span class="up">Trend up</span>' : e.rg.kind === 'down' ? '<span class="down">Trend down</span>' : '<span class="muted">Balanced</span>') : '–'],
       ['VWAP', `${fmt(e.vw)}${sig !== null ? ` · ${sig >= 0 ? '+' : ''}${sig.toFixed(1)}σ` : ''}`],
@@ -2892,7 +2934,7 @@ const AF = (() => {
     const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
     const groups = [
       ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
-      ['Session', sess], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
+      ['Session', sess], ['4H candle model', t => t.tags.c4], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
       ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
     ];
     const rows = [];
@@ -2934,12 +2976,14 @@ const AF = (() => {
           grid.push([`${tf}m · 4H only + no POC + retest`, tf, { ...o, noPoc: true, bias: 'h4', confirm: true }]);
         }
         else for (const tf of [15, 5]) {
-          grid.push([`${tf}m · v1 current rules`, tf, { sweep: true, delta: false, align: false, confirm: false }]);
-          grid.push([`${tf}m · + delta agrees`, tf, { sweep: true, delta: true, align: false, confirm: false }]);
-          grid.push([`${tf}m · + retest confirmation`, tf, { sweep: true, delta: false, align: false, confirm: true }]);
-          grid.push([`${tf}m · + retest + delta agrees`, tf, { sweep: true, delta: true, align: false, confirm: true }]);
+          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '' };
+          grid.push([`${tf}m · v1 current rules`, tf, { ...o, delta: false, confirm: false }]);
+          grid.push([`${tf}m · retest + delta agrees`, tf, { ...o }]);
+          grid.push([`${tf}m · + no trades against 4H candle model`, tf, { ...o, htf: 'block' }]);
+          grid.push([`${tf}m · 4H candle model only, retest + delta`, tf, { ...o, htf: 'only' }]);
+          grid.push([`${tf}m · 4H candle model only, rejection entry + delta`, tf, { ...o, htf: 'only', confirm: false }]);
         }
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -2947,7 +2991,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias)) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -2983,7 +3027,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias);
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || '';
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -2995,9 +3039,9 @@ const AF = (() => {
   $('#rerun').onclick = () => rebuildAll();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
