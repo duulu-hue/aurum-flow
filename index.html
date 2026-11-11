@@ -349,6 +349,8 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdChop" style="accent-color:var(--gold)"> Skip chop</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdAlign" style="accent-color:var(--gold)"> Trade with 15m &amp; 1H structure</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdConfirm" style="accent-color:var(--gold)"> Wait for a retest that holds</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdNoPoc" style="accent-color:var(--gold)"> Skip POC entries</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdBias" style="accent-color:var(--gold)"> Top-down: trade only when 4H &amp; 1H agree</label>
           <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
         </div>
         <div class="thrrow">
@@ -420,6 +422,7 @@ tr.open td{background:var(--gold-soft)}
       <section>
         <h4>Your FRVP model: structure, retest and quality</h4>
         <p><b>Trade with 15m &amp; 1H structure</b>: longs only when the last swing high was broken on both 15m and 1H (shorts: last swing low). <b>Wait for a retest that holds</b>: after the setup prints, the engine waits up to two hours for price to come back to the zone and close rejected, without a new extreme beyond the sweep; it enters on that close, with the stop beyond the sweep. If price breaks the sweep first, the setup is cancelled.</p>
+        <p><b>Top-down (forex plan)</b>: before any setup the engine reads 4H and 1H structure. Both up means longs only, both down means shorts only, anything else is mixed and it stands aside. "Skip POC entries" leaves out the POC, the middle of value where price rotates, and keeps only value edges and HVNs.</p>
         <p><b>Setup quality</b> starts at 50 and adds only what helped on both gold and silver in the 90-day test: delta agrees with the trade (+15), zone not stacked on another level (+10), zone is not the POC (+10), London hours 06:00–12:00 UTC (+10). 80+ is A+, 65–79 is A. The History test shows how each band actually performed.</p>
       </section>
       <section>
@@ -684,7 +687,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -827,7 +830,11 @@ const AF = (() => {
     let crosses = 0; for (let j = Math.max(1, k - 15); j <= k; j++) if (Math.sign(S.bars[j].c - prof.poc) !== Math.sign(S.bars[j - 1].c - prof.poc)) crosses++;
     const chop = m.chop && crosses >= 5;
     const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
-    const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60);
+    const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60), s240 = mtfTrend(S, k, 240);
+    // top-down verdict: the 4H and 1H must point the same way, otherwise the pair is mixed and the model stands aside
+    const verdict = s240 !== 'none' && s240 === s60 ? s240 : 'none';
+    const tdWord = x => x === 'up' ? 'up' : x === 'down' ? 'down' : 'undecided';
+    const tdText = verdict === 'none' ? `Top-down is mixed: 4H ${tdWord(s240)}, 1H ${tdWord(s60)}. No trade until both agree.` : `Top-down: 4H and 1H both ${verdict}, so ${verdict === 'up' ? 'longs' : 'shorts'} only.`;
     // a retest setup waits at most ~2 hours; state only moves forward once per bar
     const fresh = S._mk === undefined || k > S._mk; if (fresh) S._mk = k;
     S._arm = S._arm || { 1: null, '-1': null };
@@ -839,7 +846,7 @@ const AF = (() => {
         of = fac('flow', 'Order flow', 10), cf = fac('chop', 'Clean market', 10), rf = fac('room', 'Room to target', 10);
       const lo4 = Math.max(0, k - m.zoneBars + 1);
       let ext = up ? Infinity : -Infinity; for (let j = lo4; j <= k; j++) ext = up ? Math.min(ext, S.bars[j].l) : Math.max(ext, S.bars[j].h);
-      const half = prof.rowH / 2, zones = [{ name: 'POC', lo: prof.poc - half, hi: prof.poc + half, price: prof.poc }];
+      const half = prof.rowH / 2, zones = m.noPoc ? [] : [{ name: 'POC', lo: prof.poc - half, hi: prof.poc + half, price: prof.poc }];
       for (const z of prof.zones) if (up ? z.price <= b.c + atr : z.price >= b.c - atr) zones.push({ name: up ? 'support HVN' : 'resistance HVN', lo: z.lo, hi: z.hi, price: z.price });
       zones.push(up ? { name: 'VAL', lo: prof.val - half, hi: prof.val + half, price: prof.val } : { name: 'VAH', lo: prof.vah - half, hi: prof.vah + half, price: prof.vah });
       let zone = null;
@@ -870,7 +877,7 @@ const AF = (() => {
         of.pts = ok ? 10 : 0; of.detail = `Delta on this bar ${S.delta[k] >= 0 ? '+' : ''}${Math.round(S.delta[k])}, last 4 bars ${d4 >= 0 ? '+' : ''}${Math.round(d4)}: ${ok ? 'agrees' : 'does not agree'} with the ${up ? 'long' : 'short'}.`;
       } else { of.na = true; of.detail = 'No traded volume on this feed.'; }
       if (chop) cf.detail = `Choppy: price crossed the POC ${crosses} times in the last 16 bars.`; else { cf.pts = 10; cf.detail = `Not choppy: ${crosses} POC crosses in the last 16 bars.`; }
-      const flowOk = !m.delta || of.na || of.pts > 0, alignOk = !m.align || aligned;
+      const flowOk = !m.delta || of.na || of.pts > 0, alignOk = (!m.align || aligned) && (!m.bias || verdict === want);
       // with the retest on, delta is judged on the retest bar (the entry), not on the setup bar
       const trigger = !chop && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
 
@@ -889,6 +896,7 @@ const AF = (() => {
         else qf.detail = 'Needs a setup first, then a rejected retest of its zone.';
       } else { qf.na = true; qf.detail = 'Switched off: entries are taken on the CISD.'; if (trigger) { entry = b.c; beyond = up ? Math.min(sweepExt, zone ? zone.lo : Infinity, ext) : Math.max(sweepExt, zone ? zone.hi : -Infinity, ext); } }
       if (!m.align) { sf.na = !aligned; if (sf.na) sf.detail += ' (not required)'; }
+      if (m.bias) { sf.label = 'Top-down 4H & 1H'; sf.na = false; sf.pts = verdict === want ? 15 : 0; sf.detail = tdText; }
       const ref = entry != null ? entry : b.c;
       const buf = Math.max(0.1 * hAtr, 2 * S.pip);
       let sl = (beyond != null ? beyond : (up ? Math.min(sweepExt, ext) : Math.max(sweepExt, ext))) - d * buf, risk = d * (ref - sl);
@@ -930,8 +938,9 @@ const AF = (() => {
       const factors = [zf, lf, tf_, sf, qf, of, cf, rf];
       let why = null;
       if (!inHours) why = null; else if (chop) why = cf.detail + ' The model does not trade chop.';
+      else if (m.bias && verdict !== want) why = tdText;
       else if (m.confirm && S._arm[d] && !confirmed) why = qf.detail;
-      else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at the POC, ${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
+      else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at ${m.noPoc ? '' : 'the POC, '}${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
       else if (m.align && !aligned) why = sf.detail;
       else if (m.sweep && !swept) why = `At the ${zone.name}, but ${lf.detail.charAt(0).toLowerCase() + lf.detail.slice(1)}`;
       else if (cl == null) why = `At the ${zone.name}${swept ? ' with liquidity taken' : ''}. ${tf_.detail}`;
@@ -946,14 +955,15 @@ const AF = (() => {
       const tags = { liq: liqName && /previous day/.test(liqName) ? 'previous day high/low' : 'last 1H high/low', zone: zName ? zName.replace(/support |resistance /, '') : '–', stacked,
         h1: s60 === want ? 'with' : s60 === 'none' ? 'undecided' : 'against', m15: s15 === want ? 'with' : s15 === 'none' ? 'undecided' : 'against',
         day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
-        delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short' };
+        delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
+        h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against' };
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
         setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
     let pick = null; for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
     if (pick && m.confirm) S._arm[pick.dir] = null;
-    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60 };
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60, s240, verdict, tdText };
   }
 
   function sideEval(ctx, d) {
@@ -1924,6 +1934,7 @@ const AF = (() => {
       [`${S.tfLabel} structure`, st(S.ltf)],
       ['Value area', `${fmt(p.val)} · <span style="color:${C.gold}">${fmt(p.poc)}</span> · ${fmt(p.vah)}`],
       ['FRVP zones', (() => { const z = (e.prof.zones || []), px = price, s = z.filter(q => q.price < px).sort((a, b) => b.price - a.price)[0], r = z.filter(q => q.price >= px).sort((a, b) => a.price - b.price)[0]; return z.length ? `<span class="up">${s ? fmt(s.price) : '–'}</span> · <span class="down">${r ? fmt(r.price) : '–'}</span>` : '<span class="muted">none</span>'; })()],
+      ...(e.model ? [...(S.htfLabel === '4H' ? [] : [['4H structure', st({ trend: e.s240 })]]), ['Top-down verdict', e.verdict === 'up' ? '<span class="up">Longs only</span>' : e.verdict === 'down' ? '<span class="down">Shorts only</span>' : '<span class="muted">Mixed, no trade</span>']] : []),
       ...(e.model ? [['Prev. day H / L', `${e.pdh != null ? fmt(e.pdh) : '–'} / ${e.pdl != null ? fmt(e.pdl) : '–'}`]] : []),
       ['Day type', e.rg ? (e.rg.kind === 'up' ? '<span class="up">Trend up</span>' : e.rg.kind === 'down' ? '<span class="down">Trend down</span>' : '<span class="muted">Balanced</span>') : '–'],
       ['VWAP', `${fmt(e.vw)}${sig !== null ? ` · ${sig >= 0 ? '+' : ''}${sig.toFixed(1)}σ` : ''}`],
@@ -2016,14 +2027,14 @@ const AF = (() => {
   const saveCfg = () => LS.set('cfg', cfg);
   // settings are kept per market type; tested values become the starting point for each type
   const CLASS_INFO = {
-    metals: { name: 'Metals', status: 'Tested on 90 days: gold +0.16R and silver +0.19R per trade after costs (5m, liquidity required). Forward test before trading.', proven: true },
+    metals: { name: 'Metals', status: 'Tested on 90 days (5m, retest + delta agrees): gold +0.38R per trade over 45 trades, silver +0.34R over 48, after costs. Forward test on demo before trading.', proven: true },
     forex: { name: 'Forex', status: 'Not proven. On 90 days no forex setting held up on both EURUSD and GBPUSD. Signals are for testing only.', proven: false },
     crypto: { name: 'Crypto', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false },
     synthetics: { name: 'Synthetic indices', status: 'Not tested yet. These prices are random by design; run the History test before trusting a signal.', proven: false },
     other: { name: 'Indices & commodities', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false }
   };
   const baseCls = () => ({ strategy: 'frvp', tf: 5, model: { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, exit: 'split', align: false, confirm: false }, threshold: 65, lookback: 120, trigger: 'flow', useHTF: true, useRegime: true });
-  const CLASS_DEFAULTS = { metals: baseCls(), forex: { ...baseCls(), tf: 15 }, crypto: baseCls(), synthetics: baseCls(), other: baseCls() };
+  const CLASS_DEFAULTS = { metals: (() => { const c = baseCls(); c.model.confirm = true; c.model.delta = true; return c; })(), forex: { ...baseCls(), tf: 15 }, crypto: baseCls(), synthetics: baseCls(), other: baseCls() };
   if (!cfg.classes) {
     cfg.classes = JSON.parse(JSON.stringify(CLASS_DEFAULTS));
     if ([1, 3, 5, 15].includes(cfg.tf)) cfg.classes.metals.tf = cfg.tf;                     // keep what was set before types existed
@@ -2870,7 +2881,7 @@ const AF = (() => {
     const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
     const groups = [
       ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
-      ['Session', sess], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
+      ['Session', sess], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
       ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
     ];
     const rows = [];
@@ -2903,13 +2914,21 @@ const AF = (() => {
       const res = [], splitT = m1[0].t + (m1[m1.length - 1].t - m1[0].t) * 2 / 3;
       if (base.strategy === 'frvp') {
         const grid = [];
-        for (const tf of [15, 5]) {
+        const fx = classOf(inst.def) === 'forex';
+        if (fx) for (const tf of [15, 5]) {
+          const o = { sweep: true, delta: false, align: false, confirm: false, noPoc: false, bias: false };
+          grid.push([`${tf}m · v1 current rules`, tf, { ...o }]);
+          grid.push([`${tf}m · + no POC entries`, tf, { ...o, noPoc: true }]);
+          grid.push([`${tf}m · + top-down 4H & 1H`, tf, { ...o, bias: true }]);
+          grid.push([`${tf}m · forex plan: top-down + no POC + retest`, tf, { ...o, noPoc: true, bias: true, confirm: true }]);
+        }
+        else for (const tf of [15, 5]) {
           grid.push([`${tf}m · v1 current rules`, tf, { sweep: true, delta: false, align: false, confirm: false }]);
           grid.push([`${tf}m · + delta agrees`, tf, { sweep: true, delta: true, align: false, confirm: false }]);
           grid.push([`${tf}m · + retest confirmation`, tf, { sweep: true, delta: false, align: false, confirm: true }]);
           grid.push([`${tf}m · + retest + delta agrees`, tf, { sweep: true, delta: true, align: false, confirm: true }]);
         }
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -2917,7 +2936,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && !!v.bias === !!base.model.bias) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -2953,7 +2972,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm;
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').checked = !!c.model.bias;
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -2965,9 +2984,9 @@ const AF = (() => {
   $('#rerun').onclick = () => rebuildAll();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').checked };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
