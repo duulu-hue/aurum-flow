@@ -354,6 +354,7 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdFree" style="accent-color:var(--gold)"> A runner at breakeven gives way to a new signal</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdOneTry" style="accent-color:var(--gold)"> No second try on a side after a stop-out (same day)</label>
           <label style="display:flex;align-items:center;gap:6px">TP2 <select id="mdTp2"><option value="far">farthest key level</option><option value="near">nearest key level past the minimum</option></select></label>
+          <label style="display:flex;align-items:center;gap:6px">15m order block setup <select id="mdObz"><option value="">off</option><option value="hvn">with an HVN inside</option><option value="any">with any FRVP level inside</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Retest entry <select id="mdOb"><option value="">rejected retest of the zone</option><option value="limit">limit at the order block</option><option value="close">order block + rejection close</option><option value="stacked">order block on stacked zones only</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">Signal window <select id="mdWin"><option value="">all trading hours</option><option value="ldn">06:00–12:00 UTC</option><option value="ldnny">06:00–15:00 UTC</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">4H candle model <select id="mdHtf"><option value="">off</option><option value="block">no trades against it</option><option value="only">only trade with it</option></select></label>
@@ -702,7 +703,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '' };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -893,6 +894,40 @@ const AF = (() => {
     c.upto = Math.max(c.upto, k);
     return c.gaps;
   }
+  // 15-minute order blocks: the last candle against a displacement (a down candle before a strong up candle that
+  // closes above it). A block dies when an entry bar closes through its far side, and is spent after its first fill.
+  function ob15(S, k) {
+    const ms = 15 * 60000;
+    let c = S._ob15;
+    if (!c || c.upto > k) c = S._ob15 = { upto: -1, cur: null, bars: [], obs: [], atr: 0 };
+    const fin = () => {
+      const B = c.bars; B.push(c.cur); c.cur = null; const n = B.length - 1, z = B[n];
+      const m14 = B.slice(-14); c.atr = m14.reduce((s, x) => s + (x.h - x.l), 0) / m14.length;
+      if (n >= 1 && c.atr > 0) {
+        for (const d of [1, -1]) {
+          if (d * (z.c - z.o) < 0.8 * c.atr) continue;
+          for (let i = n - 1; i >= Math.max(0, n - 3); i--) {
+            const o = B[i];
+            if (d * (o.c - o.o) < 0 && (d > 0 ? z.c > o.h : z.c < o.l)) {
+              if (!c.obs.some(x => x.t === o.t && x.dir === d)) c.obs.push({ dir: d, lo: o.l, hi: o.h, t: o.t, born: z.t + ms, dead: false, used: false, firedK: -1 });
+              break;
+            }
+          }
+        }
+        if (c.obs.length > 40) c.obs.splice(0, c.obs.length - 40);
+      }
+      if (B.length > 20) B.splice(0, B.length - 20);
+    };
+    for (let j = c.upto + 1; j <= k; j++) {
+      const b = S.bars[j], key = Math.floor(b.t / ms);
+      if (c.cur && c.cur.key !== key) fin();
+      for (const o of c.obs) if (!o.dead && (o.dir > 0 ? b.c < o.lo : b.c > o.hi)) o.dead = true;
+      if (!c.cur) c.cur = { key, t: key * ms, o: b.o, h: b.h, l: b.l, c: b.c }; else { if (b.h > c.cur.h) c.cur.h = b.h; if (b.l < c.cur.l) c.cur.l = b.l; c.cur.c = b.c; }
+      if (b.t + S.interval >= (key + 1) * ms) fin();
+    }
+    c.upto = Math.max(c.upto, k);
+    return c;
+  }
   function modelEval(S, k) {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), m = modelOpts(S), f = x => x.toFixed(S.dec);
     const prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
@@ -905,7 +940,7 @@ const AF = (() => {
     const hrs = S.params.hours, inHours = (!hrs || inWindow(b.t + S.interval, hrs)) && (!WIN[m.win] || inWindow(b.t + S.interval, WIN[m.win]));
     const dayKey = Math.floor((b.t + S.interval - m.dayStart * 60000) / 86400e3), lossDay = S._lossDay || {};
     const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60), s240 = mtfTrend(S, k, 240);
-    const c4 = crt4h(S, k), c4dir = c4 ? c4.dir : 0, fx = x => x.toFixed(S.dec), gaps = m.cont ? fvg15(S, k) : [];
+    const c4 = crt4h(S, k), c4dir = c4 ? c4.dir : 0, fx = x => x.toFixed(S.dec), gaps = m.cont ? fvg15(S, k) : [], obk = m.obz ? ob15(S, k) : null;
     const c4Text = c4 ? (c4.dir < 0 ? `4H candle model is bearish: candle 2 took candle 1's high at ${fx(c4.c1.h)} and closed back inside. Shorts only, target ${fx(c4.c1.l)}.`
       : `4H candle model is bullish: candle 2 took candle 1's low at ${fx(c4.c1.l)} and closed back inside. Longs only, target ${fx(c4.c1.h)}.`)
       : 'No 4H candle setup: waiting for a 4H candle to take the previous 4H high or low and close back inside.';
@@ -1066,6 +1101,30 @@ const AF = (() => {
           break;
         }
       }
+      // setup C: price returns to an untouched 15m order block that holds an FRVP level; a limit at that level fills
+      let C3 = null;
+      if (obk && !fire && !B2 && inHours && !retry && k >= 3) {
+        const lv = m.obz === 'hvn' ? prof.zones.map(z => [z.price, up ? 'support HVN' : 'resistance HVN'])
+          : [[prof.poc, 'POC'], [up ? prof.val : prof.vah, up ? 'VAL' : 'VAH'], ...prof.zones.map(z => [z.price, up ? 'support HVN' : 'resistance HVN'])];
+        const tolC = 0.25 * obk.atr;
+        for (const o of obk.obs) {
+          if (o.dir !== d || o.dead || (o.used && o.firedK !== k) || b.t < o.born || b.t - o.born > 24 * 3600e3) continue;
+          const into = up ? b.l <= o.hi : b.h >= o.lo; if (!into) continue;
+          const Ls = lv.filter(x => x[0] != null && x[0] >= o.lo - tolC && x[0] <= o.hi + tolC).sort((x, y) => d * (y[0] - x[0]));
+          const L = Ls[0]; if (!L) { if (fresh) o.used = true; continue; }   // the first return to a block without a level spends it
+          if (!(up ? b.l <= L[0] : b.h >= L[0])) continue;                   // the limit sits at the level; not reached yet
+          const ref3 = up ? Math.min(L[0], b.o) : Math.max(L[0], b.o);
+          let sl3 = (up ? Math.min(o.lo, L[0]) : Math.max(o.hi, L[0])) - d * Math.max(buf, 0.1 * obk.atr), risk3 = d * (ref3 - sl3);
+          if (risk3 < minRisk) { sl3 = ref3 - d * minRisk; risk3 = minRisk; }
+          if (fresh) { o.used = true; o.firedK = k; }
+          if (risk3 > maxRisk + 1e-9) continue;
+          const c3s = cands.filter(c => d * (c[0] - ref3) > 0);
+          const u1 = c3s.find(c => d * (c[0] - ref3) >= 1.0 * risk3) || null, u2 = u1 ? pickT2(c3s, ref3, risk3, u1) : null;
+          if (!u2) continue;
+          C3 = { o, lvl: L, ref: ref3, sl: sl3, risk: risk3, t1: u1, t2: u2, rr1: d * (u1[0] - ref3) / risk3, rr2: d * (u2[0] - ref3) / risk3 };
+          break;
+        }
+      }
       // setup quality, 0–100: what you weigh when deciding how much you like a trade
       const armed = S._arm[d] && S._arm[d].firedK === k ? S._arm[d] : null;
       const liqName = armed ? armed.liq : swept ? swept.name : null, zName = armed ? armed.zone : zone ? zone.name : null, zP = armed ? armed.zoneP : zone ? zone.price : null;
@@ -1112,6 +1171,18 @@ const AF = (() => {
         const plan2 = `4H candle model ${up ? 'bullish' : 'bearish'}, pullback into the 15m FVG on the ${B2.lvl[1]}, then a ${up ? 'bullish' : 'bearish'} displacement. Target ${B2.t2[1]} ${f(B2.t2[0])}.`;
         return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: B2.ref, sl: B2.sl, risk: B2.risk, tp1: B2.t1[0], tp1Name: B2.t1[1], tp2: B2.t2[0], tp2Name: B2.t2[1], rr1: B2.rr1, rr2: B2.rr2,
           setup: `FRVP 4H continuation ${up ? 'long' : 'short'}`, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan2, swept: true, bWhy };
+      }
+      if (C3) {
+        const o = C3.o;
+        zf.pts = 25; zf.detail = `Price came back to the untouched 15m order block ${f(o.lo)}–${f(o.hi)} that holds the ${C3.lvl[1]} at ${f(C3.lvl[0])}.`;
+        lf.na = true; lf.detail = 'Order block return: the liquidity is the resting orders in the block.';
+        tf_.na = true; tf_.detail = `Limit ${up ? 'buy' : 'sell'} at the ${C3.lvl[1]} ${f(C3.ref)}.`;
+        qf.na = true; qf.detail = 'Entry on the first return to the block.';
+        rf.pts = 10; rf.detail = `TP1 ${C3.t1[1]} ${f(C3.t1[0])} at ${C3.rr1.toFixed(1)}R, TP2 ${C3.t2[1]} ${f(C3.t2[0])} at ${C3.rr2.toFixed(1)}R.`;
+        Object.assign(tags, { setup: '15m order block', entry: 'limit at level', zone: C3.lvl[1].replace(/support |resistance /, ''), liq: 'order block', rr1: C3.rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R' });
+        const plan3 = `Untouched 15m order block with the ${C3.lvl[1]} inside it; limit ${up ? 'buy' : 'sell'} at ${f(C3.ref)} on the first return, stop beyond the block. Target ${C3.t2[1]} ${f(C3.t2[0])}.`;
+        return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire: true, entry: C3.ref, sl: C3.sl, risk: C3.risk, tp1: C3.t1[0], tp1Name: C3.t1[1], tp2: C3.t2[0], tp2Name: C3.t2[1], rr1: C3.rr1, rr2: C3.rr2,
+          setup: `FRVP 15m order block ${up ? 'long' : 'short'}`, limitFill: true, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan3, swept: false, bWhy };
       }
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
         setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, bWhy, limitFill: obFill && arm.ob.mode === 'limit', hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
@@ -3025,7 +3096,7 @@ const AF = (() => {
     if (!v) { out.innerHTML = '<p class="hintp">Pick a date and time first.</p>'; return; }
     const g = histCtx.grid.find(x => x[0] === $('#histPick').value) || histCtx.grid[0];
     const [, tf, mo] = g, t0 = new Date(v).getTime(), a = t0 - 30 * 60000, z = t0 + 90 * 60000;
-    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', ...mo } };
+    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', ...mo } };
     out.innerHTML = '<p class="hintp">Replaying…</p>'; await new Promise(r => setTimeout(r));
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tf * 60000, htfMult: HTF_MULT[tf] });
     Object.assign(T.params, params);
@@ -3123,21 +3194,14 @@ const AF = (() => {
         }
         else for (const tf of [15, 5]) {
           if (tf !== 5) continue;
-          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '' };
+          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '' };
           grid.push([`5m · retest + delta agrees`, tf, { ...o }]);
-          grid.push([`5m · + runner gives way to a new signal`, tf, { ...o, free: true }]);
-          grid.push([`5m · + nearest TP2`, tf, { ...o, tp2: 'near' }]);
-          grid.push([`5m · + no second try after a stop`, tf, { ...o, oneTry: true }]);
+          grid.push([`5m · + 15m order block with an HVN inside`, tf, { ...o, obz: 'hvn' }]);
+          grid.push([`5m · + 15m order block with any FRVP level inside`, tf, { ...o, obz: 'any' }]);
           grid.push([`5m · + only 06:00–12:00 UTC`, tf, { ...o, win: 'ldn' }]);
-          grid.push([`5m · + only 06:00–15:00 UTC`, tf, { ...o, win: 'ldnny' }]);
-          grid.push([`5m · + 4H continuation setup`, tf, { ...o, cont: true }]);
-          grid.push([`5m · + runner gives way + nearest TP2`, tf, { ...o, free: true, tp2: 'near' }]);
-          grid.push([`5m · order block return (limit)`, tf, { ...o, ob: 'limit' }]);
-          grid.push([`5m · order block return (rejection close)`, tf, { ...o, ob: 'close' }]);
-          grid.push([`5m · order block return on stacked zones only`, tf, { ...o, ob: 'stacked' }]);
         }
         histCtx = { inst, m1, base, grid };
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -3145,7 +3209,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -3181,7 +3245,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || '';
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || '';
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -3194,9 +3258,9 @@ const AF = (() => {
   $('#chkBtn').onclick = () => explainMoment();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
