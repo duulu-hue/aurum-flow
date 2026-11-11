@@ -339,11 +339,13 @@ tr.open td{background:var(--gold-soft)}
       <div class="modelOnly">
         <div class="thrrow">
           <label for="mdDay">Trading day starts (UTC)</label><input type="time" id="mdDay" style="background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 8px">
-          <span class="muted" style="font-size:12px">21:00 UTC is midnight in Nairobi. The profile runs from the previous day's start to now.</span>
+          <span class="muted" style="font-size:12px">22:00 UTC is 01:00 in Nairobi, when your broker's trading day starts. The profile runs from the previous day's start to now. Gold and silver skip the broker's weekend close.</span>
         </div>
         <div class="thrrow">
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdSweep" style="accent-color:var(--gold)"> Require liquidity taken</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdChop" style="accent-color:var(--gold)"> Skip chop</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdAlign" style="accent-color:var(--gold)"> Trade with 15m &amp; 1H structure</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdConfirm" style="accent-color:var(--gold)"> Wait for a retest that holds</label>
           <label style="display:flex;align-items:center;gap:6px" id="mdDeltaWrap"><input type="checkbox" id="mdDelta" style="accent-color:var(--gold)"> Require delta to agree</label>
         </div>
         <div class="thrrow">
@@ -406,11 +408,16 @@ tr.open td{background:var(--gold-soft)}
         <button class="btn" id="histCsv" type="button">Download trades (CSV)</button>
       </div>
       <p class="hintp" id="histTradesMsg" style="margin-bottom:8px"></p>
-      <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
+      <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Quality</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
     </div>
   </div>
   <div class="pane" id="pane-rules" hidden>
     <div class="rules">
+      <section>
+        <h4>Your FRVP model: structure, retest and quality</h4>
+        <p><b>Trade with 15m &amp; 1H structure</b>: longs only when the last swing high was broken on both 15m and 1H (shorts: last swing low). <b>Wait for a retest that holds</b>: after the setup prints, the engine waits up to two hours for price to come back to the zone and close rejected, without a new extreme beyond the sweep; it enters on that close, with the stop beyond the sweep. If price breaks the sweep first, the setup is cancelled.</p>
+        <p><b>Setup quality</b> starts at 50 and adds: previous day high/low swept (+10), zone stacked on another key level (+10), 15m and 1H structure agree (+10), retest held (+5), London or New York hours (+5), TP1 at 1.5R or more (+5), delta agrees (+5). 80+ is A+, 65–79 is A. The History test shows how each band actually performed.</p>
+      </section>
       <section>
         <h4>Your FRVP model</h4>
         <p>The profile runs from the start of the previous trading day to now. A short needs all of: price trades up into the POC, a resistance HVN or VAH and closes back below it; buy-side liquidity was taken in the last 16 bars (previous day high, or the high of one of the last two higher-timeframe candles) and price is back below it; a bearish CISD on the entry timeframe (a close below the open of the last run of up-candles); and no chop (fewer than 5 POC crosses in 16 bars). Longs are the mirror at the POC, a support HVN or VAL after sell-side liquidity is taken.</p>
@@ -673,7 +680,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -783,23 +790,51 @@ const AF = (() => {
     const lvl = B[s].o;
     return (d < 0 ? (b.c < lvl && p.c >= lvl) : (b.c > lvl && p.c <= lvl)) ? lvl : null;
   }
+  // market structure on a fixed timeframe (15m, 1H) built from the entry bars: trend flips when a close breaks the last fractal swing
+  function mtfTrend(S, k, mins) {
+    const ms = mins * 60000; S._mtf = S._mtf || {};
+    let c = S._mtf[mins];
+    if (!c || c.upto > k) c = S._mtf[mins] = { upto: -1, cur: null, bars: [], trend: 'none', lastH: null, lastL: null };
+    const fin = () => {
+      const B = c.bars; B.push(c.cur); c.cur = null; const n = B.length;
+      if (n >= 5) { const i = n - 3, h = B[i].h, l = B[i].l;
+        if (h > B[i - 1].h && h > B[i - 2].h && h >= B[i + 1].h && h >= B[i + 2].h) c.lastH = { price: h, broken: false };
+        if (l < B[i - 1].l && l < B[i - 2].l && l <= B[i + 1].l && l <= B[i + 2].l) c.lastL = { price: l, broken: false }; }
+      const cl = B[n - 1].c;
+      if (c.lastH && !c.lastH.broken && cl > c.lastH.price) { c.lastH.broken = true; c.trend = 'up'; }
+      else if (c.lastL && !c.lastL.broken && cl < c.lastL.price) { c.lastL.broken = true; c.trend = 'down'; }
+      if (B.length > 400) B.splice(0, B.length - 400);
+    };
+    for (let j = c.upto + 1; j <= k; j++) {
+      const b = S.bars[j], key = Math.floor(b.t / ms);
+      if (c.cur && c.cur.key !== key) fin();
+      if (!c.cur) c.cur = { key, o: b.o, h: b.h, l: b.l, c: b.c }; else { if (b.h > c.cur.h) c.cur.h = b.h; if (b.l < c.cur.l) c.cur.l = b.l; c.cur.c = b.c; }
+      if (b.t + S.interval >= (key + 1) * ms) fin();
+    }
+    c.upto = Math.max(c.upto, k);
+    return c.trend;
+  }
   function modelEval(S, k) {
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), m = modelOpts(S), f = x => x.toFixed(S.dec);
     const prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
     const td = twoDay(S, k), hAtr = Math.max(htfAtr(S), atr);
     const pdh = td.prev.length ? Math.max(...td.prev.map(j => S.bars[j].h)) : null, pdl = td.prev.length ? Math.min(...td.prev.map(j => S.bars[j].l)) : null;
     const H = S.htfBars, h1 = H[H.length - 1] || null, h2 = H[H.length - 2] || null, tfH = S.htfLabel;
-    // chop: price keeps crossing the POC
     let crosses = 0; for (let j = Math.max(1, k - 15); j <= k; j++) if (Math.sign(S.bars[j].c - prof.poc) !== Math.sign(S.bars[j - 1].c - prof.poc)) crosses++;
     const chop = m.chop && crosses >= 5;
     const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
+    const s15 = mtfTrend(S, k, 15), s60 = mtfTrend(S, k, 60);
+    // a retest setup waits at most ~2 hours; state only moves forward once per bar
+    const fresh = S._mk === undefined || k > S._mk; if (fresh) S._mk = k;
+    S._arm = S._arm || { 1: null, '-1': null };
+    const armBars = Math.max(4, Math.round(2 * 3600e3 / S.interval)), tol = 0.25 * atr, mU = new Date(b.t + S.interval).getUTCHours();
     const side = d => {
       const up = d > 0, fac = (key, label, max) => ({ key, label, max, pts: 0, detail: '' });
-      const zf = fac('zone', 'FRVP zone', 30), lf = fac('liq', 'Liquidity taken', 25), tf_ = fac('cisd', `${S.tfLabel} CISD`, 20),
-        of = fac('flow', 'Order flow', 10), cf = fac('chop', 'Clean market', 15), rf = fac('room', 'Room to target', 10);
+      const zf = fac('zone', 'FRVP zone', 25), lf = fac('liq', 'Liquidity taken', 20), tf_ = fac('cisd', `${S.tfLabel} CISD`, 15),
+        sf = fac('align', 'Structure 15m & 1H', 15), qf = fac('confirm', 'Retest confirmation', 15),
+        of = fac('flow', 'Order flow', 10), cf = fac('chop', 'Clean market', 10), rf = fac('room', 'Room to target', 10);
       const lo4 = Math.max(0, k - m.zoneBars + 1);
       let ext = up ? Infinity : -Infinity; for (let j = lo4; j <= k; j++) ext = up ? Math.min(ext, S.bars[j].l) : Math.max(ext, S.bars[j].h);
-      // zones: POC, HVNs on the right side, and the value edge
       const half = prof.rowH / 2, zones = [{ name: 'POC', lo: prof.poc - half, hi: prof.poc + half, price: prof.poc }];
       for (const z of prof.zones) if (up ? z.price <= b.c + atr : z.price >= b.c - atr) zones.push({ name: up ? 'support HVN' : 'resistance HVN', lo: z.lo, hi: z.hi, price: z.price });
       zones.push(up ? { name: 'VAL', lo: prof.val - half, hi: prof.val + half, price: prof.val } : { name: 'VAH', lo: prof.vah - half, hi: prof.vah + half, price: prof.vah });
@@ -808,65 +843,107 @@ const AF = (() => {
         const touched = up ? ext <= z.hi : ext >= z.lo, held = up ? b.c > z.price : b.c < z.price, near = up ? b.c - z.hi <= atr : z.lo - b.c <= atr;
         if (touched && held && near && (!zone || Math.abs(b.c - z.price) < Math.abs(b.c - zone.price))) zone = z;
       }
-      if (zone) { zf.pts = 30; zf.detail = `Price traded ${up ? 'down into' : 'up into'} the ${zone.name} at ${f(zone.price)} and closed back ${up ? 'above' : 'below'} it.`; }
+      if (zone) { zf.pts = 25; zf.detail = `Price traded ${up ? 'down into' : 'up into'} the ${zone.name} at ${f(zone.price)} and closed back ${up ? 'above' : 'below'} it.`; }
       else zf.detail = `Not at the POC (${f(prof.poc)}), ${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'} right now.`;
-      // liquidity: previous day high/low or the last two higher-timeframe candles, swept recently and given back
       const liqs = [];
       if (up) { if (pdl != null) liqs.push([pdl, 'previous day low']); if (h1) liqs.push([h1.l, `last ${tfH} low`]); if (h2) liqs.push([h2.l, `prior ${tfH} low`]); }
       else { if (pdh != null) liqs.push([pdh, 'previous day high']); if (h1) liqs.push([h1.h, `last ${tfH} high`]); if (h2) liqs.push([h2.h, `prior ${tfH} high`]); }
       let swept = null, sweepExt = up ? Infinity : -Infinity;
       for (let j = Math.max(0, k - m.sweepBars + 1); j <= k; j++) sweepExt = up ? Math.min(sweepExt, S.bars[j].l) : Math.max(sweepExt, S.bars[j].h);
       for (const [lvl, name] of liqs) if ((up ? sweepExt < lvl && b.c > lvl : sweepExt > lvl && b.c < lvl) && !swept) swept = { lvl, name };
-      if (swept) { lf.pts = 25; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken: price ran the ${swept.name} at ${f(swept.lvl)} and came back ${up ? 'above' : 'below'} it.`; }
+      if (swept) { lf.pts = 20; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken: price ran the ${swept.name} at ${f(swept.lvl)} and came back ${up ? 'above' : 'below'} it.`; }
       else lf.detail = `No ${up ? 'sell' : 'buy'}-side sweep yet. Watching the ${liqs.map(x => `${x[1]} ${f(x[0])}`).join(', ') || 'previous day and recent candle levels'}.`;
       const cl = cisd(S, k, d);
-      if (cl != null) { tf_.pts = 20; tf_.detail = `${up ? 'Bullish' : 'Bearish'} CISD: closed ${up ? 'above' : 'below'} ${f(cl)}, the open of the last ${up ? 'down' : 'up'}-move.`; }
+      if (cl != null) { tf_.pts = 15; tf_.detail = `${up ? 'Bullish' : 'Bearish'} CISD: closed ${up ? 'above' : 'below'} ${f(cl)}, the open of the last ${up ? 'down' : 'up'}-move.`; }
       else tf_.detail = `Waiting for a ${up ? 'bullish' : 'bearish'} CISD on the ${S.tfLabel}.`;
+      const want = up ? 'up' : 'down', aligned = s15 === want && s60 === want;
+      const word = x => x === 'up' ? 'up' : x === 'down' ? 'down' : 'undecided';
+      if (aligned) { sf.pts = 15; sf.detail = `Market structure is ${want} on both 15m and 1H.`; }
+      else sf.detail = `Structure: 15m ${word(s15)}, 1H ${word(s60)}. ${up ? 'Longs' : 'Shorts'} want both ${want}.`;
       if (S.hasFlow) {
         let d4 = 0; for (let j = Math.max(0, k - 3); j <= k; j++) d4 += S.delta[j];
         const ok = d * S.delta[k] > 0 && d * d4 > 0;
-        of.pts = ok ? 10 : 0; of.detail = `Delta on the trigger bar ${S.delta[k] >= 0 ? '+' : ''}${Math.round(S.delta[k])}, last 4 bars ${d4 >= 0 ? '+' : ''}${Math.round(d4)}: ${ok ? 'agrees' : 'does not agree'} with the ${up ? 'long' : 'short'}.`;
+        of.pts = ok ? 10 : 0; of.detail = `Delta on this bar ${S.delta[k] >= 0 ? '+' : ''}${Math.round(S.delta[k])}, last 4 bars ${d4 >= 0 ? '+' : ''}${Math.round(d4)}: ${ok ? 'agrees' : 'does not agree'} with the ${up ? 'long' : 'short'}.`;
       } else { of.na = true; of.detail = 'No traded volume on this feed.'; }
-      if (chop) cf.detail = `Choppy: price crossed the POC ${crosses} times in the last 16 bars.`; else { cf.pts = 15; cf.detail = `Not choppy: ${crosses} POC crosses in the last 16 bars.`; }
-      // stop and targets
-      const entry = b.c, buf = Math.max(0.1 * hAtr, 2 * S.pip);
-      const beyond = up ? Math.min(sweepExt, zone ? zone.lo : Infinity, ext) : Math.max(sweepExt, zone ? zone.hi : -Infinity, ext);
-      let sl = beyond - d * buf, risk = d * (entry - sl);
+      if (chop) cf.detail = `Choppy: price crossed the POC ${crosses} times in the last 16 bars.`; else { cf.pts = 10; cf.detail = `Not choppy: ${crosses} POC crosses in the last 16 bars.`; }
+      const flowOk = !m.delta || of.na || of.pts > 0, alignOk = !m.align || aligned;
+      const trigger = !chop && !!zone && cl != null && (swept || !m.sweep) && flowOk && alignOk;
+
+      // entry: straight on the trigger, or after a retest of the zone that is rejected (the user's confirmation)
+      let entry = null, beyond = null, confirmed = false, arm = S._arm[d];
+      if (m.confirm) {
+        if (arm && fresh) {
+          const broke = up ? b.l < arm.ext : b.h > arm.ext;
+          if (broke || k - arm.k > armBars) arm = S._arm[d] = null;
+          else if (k > arm.k) {
+            const reached = up ? b.l <= arm.lvl + tol : b.h >= arm.lvl - tol, rejected = up ? (b.c > arm.lvl && b.c > b.o) : (b.c < arm.lvl && b.c < b.o);
+            if (reached && rejected) { confirmed = true; entry = b.c; beyond = arm.ext; }
+          }
+        } else if (arm && !fresh && arm.firedK === k) { confirmed = true; entry = b.c; beyond = arm.ext; }
+        if (arm) { qf.pts = confirmed ? 15 : 0; qf.detail = confirmed ? `Retest held: price came back to the ${arm.zone} at ${f(arm.lvl)} and was rejected without a new ${up ? 'low' : 'high'} beyond ${f(arm.ext)}.` : `Waiting for price to retest the ${arm.zone} at ${f(arm.lvl)} and be rejected (setup expires in ${Math.max(0, armBars - (k - arm.k))} bars).`; }
+        else qf.detail = 'Needs a setup first, then a rejected retest of its zone.';
+      } else { qf.na = true; qf.detail = 'Switched off: entries are taken on the CISD.'; if (trigger) { entry = b.c; beyond = up ? Math.min(sweepExt, zone ? zone.lo : Infinity, ext) : Math.max(sweepExt, zone ? zone.hi : -Infinity, ext); } }
+      if (!m.align) { sf.na = !aligned; if (sf.na) sf.detail += ' (not required)'; }
+      const ref = entry != null ? entry : b.c;
+      const buf = Math.max(0.1 * hAtr, 2 * S.pip);
+      let sl = (beyond != null ? beyond : (up ? Math.min(sweepExt, ext) : Math.max(sweepExt, ext))) - d * buf, risk = d * (ref - sl);
       const minRisk = Math.max(0.4 * hAtr, 0.8 * atr, 8 * (S.params.costPrice || 0)), maxRisk = Math.max(1.5 * hAtr, minRisk);
-      if (risk < minRisk) { sl = entry - d * minRisk; risk = minRisk; }
+      if (risk < minRisk) { sl = ref - d * minRisk; risk = minRisk; }
       const cands = [];
-      const add = (p, n) => { if (p != null && isFinite(p) && d * (p - entry) > 0) cands.push([p, n]); };
+      const add = (p, n) => { if (p != null && isFinite(p) && d * (p - ref) > 0) cands.push([p, n]); };
       add(prof.poc, 'POC'); add(up ? prof.vah : prof.val, up ? 'VAH' : 'VAL'); for (const z of prof.zones) add(z.price, up ? 'resistance HVN' : 'support HVN');
       add(up ? pdh : pdl, up ? 'previous day high' : 'previous day low'); add(up ? prof.high : prof.low, up ? 'profile high' : 'profile low');
       cands.sort((x, y) => d * (x[0] - y[0]));
-      const t1 = cands.find(c => d * (c[0] - entry) >= 1.0 * risk) || null;
-      const t2 = t1 ? (cands.filter(c => d * (c[0] - entry) >= Math.max(m.minRR * risk, d * (t1[0] - entry) + 0.5 * risk)).pop() || null) : null;
-      const rr1 = t1 ? d * (t1[0] - entry) / risk : 0, rr2 = t2 ? d * (t2[0] - entry) / risk : 0;
-      if (risk > maxRisk) rf.detail = `The stop beyond the sweep would be ${Math.round(risk / S.pip)} ${S.pip >= 0.1 ? 'pips' : 'pips'}, too wide.`;
+      const t1 = cands.find(c => d * (c[0] - ref) >= 1.0 * risk) || null;
+      const t2 = t1 ? (cands.filter(c => d * (c[0] - ref) >= Math.max(m.minRR * risk, d * (t1[0] - ref) + 0.5 * risk)).pop() || null) : null;
+      const rr1 = t1 ? d * (t1[0] - ref) / risk : 0, rr2 = t2 ? d * (t2[0] - ref) / risk : 0;
+      if (risk > maxRisk) rf.detail = `The stop beyond the sweep would be ${Math.round(risk / S.pip)} pips, too wide.`;
       else if (t2) { rf.pts = 10; rf.detail = `TP1 ${t1[1]} ${f(t1[0])} at ${rr1.toFixed(1)}R, TP2 ${t2[1]} ${f(t2[0])} at ${rr2.toFixed(1)}R.`; }
       else rf.detail = t1 ? `Only ${rr1.toFixed(1)}R to ${t1[1]}; no level ${m.minRR}R away.` : 'No key level at least 1R away.';
-      const factors = [zf, lf, tf_, of, cf, rf];
-      let pts = 0, max = 0; for (const x of factors) if (!x.na) { pts += x.pts; max += x.max; }
-      const score = Math.round(100 * pts / max);
-      const flowOk = !m.delta || of.na || of.pts > 0;
-      const fire = inHours && !chop && !!zone && cl != null && (swept || !m.sweep) && flowOk && !!t2 && risk <= maxRisk + 1e-9;
+      const roomOk = !!t2 && risk <= maxRisk + 1e-9;
+      // arm a retest setup when the trigger prints (it needs room from the zone, judged at the retest level)
+      if (m.confirm && fresh && trigger && !S._arm[d] && !confirmed) {
+        const lvl = up ? Math.max(zone.hi, cl) : Math.min(zone.lo, cl), e0 = up ? Math.min(sweepExt, zone.lo, ext) : Math.max(sweepExt, zone.hi, ext);
+        S._arm[d] = { k, lvl, ext: e0, zone: zone.name, liq: swept ? swept.name : null, zoneP: zone.price };
+        qf.detail = `Setup armed at the ${zone.name}. Waiting for a retest of ${f(lvl)} that is rejected.`;
+      }
+      const ready = m.confirm ? confirmed : trigger;
+      const fire = inHours && ready && roomOk;
+      if (m.confirm && confirmed && fresh) { if (fire) S._arm[d] = Object.assign(S._arm[d] || {}, { firedK: k }); else S._arm[d] = null; }
+      if (m.confirm && fresh && fire === false && confirmed) S._arm[d] = null;
+      // setup quality, 0–100: what you weigh when deciding how much you like a trade
+      const armed = S._arm[d] && S._arm[d].firedK === k ? S._arm[d] : null;
+      const liqName = armed ? armed.liq : swept ? swept.name : null, zName = armed ? armed.zone : zone ? zone.name : null, zP = armed ? armed.zoneP : zone ? zone.price : null;
+      let q = 50;
+      if (liqName === 'previous day high' || liqName === 'previous day low') q += 10;
+      if (zP != null && [prof.poc, prof.val, prof.vah, ...prof.zones.map(z => z.price)].filter(p => Math.abs(p - zP) > 1e-9 && Math.abs(p - zP) <= prof.rowH * 1.01).length) q += 10;
+      if (aligned) q += 10;
+      if (confirmed) q += 5;
+      if (mU >= 6 && mU < 17) q += 5;
+      if (rr1 >= 1.5) q += 5;
+      if (!of.na && of.pts > 0) q += 5;
+      q = Math.min(95, q);
+      const factors = [zf, lf, tf_, sf, qf, of, cf, rf];
       let why = null;
       if (!inHours) why = null; else if (chop) why = cf.detail + ' The model does not trade chop.';
+      else if (m.confirm && S._arm[d] && !confirmed) why = qf.detail;
       else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at the POC, ${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
+      else if (m.align && !aligned) why = sf.detail;
       else if (m.sweep && !swept) why = `At the ${zone.name}, but ${lf.detail.charAt(0).toLowerCase() + lf.detail.slice(1)}`;
       else if (cl == null) why = `At the ${zone.name}${swept ? ' with liquidity taken' : ''}. ${tf_.detail}`;
       else if (!flowOk) why = of.detail;
-      else if (!t2) why = rf.detail;
+      else if (!roomOk) why = rf.detail;
       const nz = up ? [prof.poc, ...prof.zones.filter(z => z.price < b.c).map(z => z.price), prof.val].filter(p => p <= b.c + atr).sort((a, c) => c - a)[0]
         : [prof.poc, ...prof.zones.filter(z => z.price > b.c).map(z => z.price), prof.vah].filter(p => p >= b.c - atr).sort((a, c) => a - c)[0];
       const liqTxt = liqs.length ? `${liqs[0][1]} ${f(liqs[0][0])}` : 'recent liquidity';
-      const plan = `${up ? 'Sell' : 'Buy'}-side liquidity (${liqTxt}) taken, price back ${up ? 'above' : 'below'} it, then a ${up ? 'bullish' : 'bearish'} CISD at ${nz != null ? f(nz) : 'an FRVP zone'}. Target ${cands.length ? `${cands[0][1]} ${f(cands[0][0])}` : 'the next key level'}.`;
-      return { dir: d, factors, score, fire, entry, sl, risk, tp1: t1 ? t1[0] : entry + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : entry + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
-        setup: `FRVP ${zone ? zone.name : 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
+      const plan = `${m.align ? `15m and 1H structure ${want}, then ` : ''}${up ? 'sell' : 'buy'}-side liquidity (${liqTxt}) taken and a ${up ? 'bullish' : 'bearish'} CISD at ${nz != null ? f(nz) : 'an FRVP zone'}${m.confirm ? ', then a retest of that zone that holds' : ''}. Target ${cands.length ? `${cands[0][1]} ${f(cands[0][0])}` : 'the next key level'}.`;
+      return { dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
+        setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
     let pick = null; for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
-    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true };
+    if (pick && m.confirm) S._arm[pick.dir] = null;
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60 };
   }
 
   function sideEval(ctx, d) {
@@ -1044,6 +1121,7 @@ const AF = (() => {
   function narrate(S, c) {
     const f = x => x.toFixed(S.dec), pips = x => Math.round(x / S.pip);
     const parts = c.factors.filter(x => x.pts > 0 && !['room', 'htf', 'regime', 'chop'].includes(x.key)).map(x => x.detail);
+    if (c.grade) parts.unshift(`Setup quality ${c.quality} (${c.grade}).`);
     const rgF = c.factors.find(x => x.key === 'regime'); if (rgF && !rgF.na) parts.push(rgF.detail);
     const htf = c.factors.find(x => x.key === 'htf');
     return `${c.dir > 0 ? 'Long' : 'Short'}, ${c.setup.toLowerCase()}. ${parts.join(' ')}${!htf || htf.na ? '' : ' ' + htf.detail} ` +
@@ -1768,7 +1846,7 @@ const AF = (() => {
     if (t) {
       const r = live ? signalR(t, lastPrice()) : AF.liveR(S, lastPrice()), dir = t.dir > 0;
       el.innerHTML = `<div class="sig-head"><span class="pill ${dir ? 'long' : 'short'}">${dir ? 'BUY' : 'SELL'}</span><span class="num ${r >= 0 ? 'up' : 'down'}">${r >= 0 ? '+' : ''}${r.toFixed(2)}R ${t.stage ? '· TP1 banked' : '· running'}</span></div>
-        <div class="sig-title">${esc(t.setup)} · score ${t.score}</div>
+        <div class="sig-title">${esc(t.setup)} · ${e && e.model ? `quality ${t.score} (${t.score >= 80 ? 'A+' : t.score >= 65 ? 'A' : 'B'})` : `score ${t.score}`}</div>
         <div class="levels">
           <div class="lv"><span>Entry</span><b>${fmt(t.entry)}</b><small>${tfmt(t.t)}</small></div>
           <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
@@ -1934,7 +2012,7 @@ const AF = (() => {
     synthetics: { name: 'Synthetic indices', status: 'Not tested yet. These prices are random by design; run the History test before trusting a signal.', proven: false },
     other: { name: 'Indices & commodities', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false }
   };
-  const baseCls = () => ({ strategy: 'frvp', tf: 5, model: { dayStart: 1260, sweep: true, delta: false, chop: true, minRR: 2.5, exit: 'split' }, threshold: 65, lookback: 120, trigger: 'flow', useHTF: true, useRegime: true });
+  const baseCls = () => ({ strategy: 'frvp', tf: 5, model: { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, exit: 'split', align: false, confirm: false }, threshold: 65, lookback: 120, trigger: 'flow', useHTF: true, useRegime: true });
   const CLASS_DEFAULTS = { metals: baseCls(), forex: { ...baseCls(), tf: 15 }, crypto: baseCls(), synthetics: baseCls(), other: baseCls() };
   if (!cfg.classes) {
     cfg.classes = JSON.parse(JSON.stringify(CLASS_DEFAULTS));
@@ -1943,6 +2021,7 @@ const AF = (() => {
   }
   for (const k of Object.keys(CLASS_DEFAULTS)) cfg.classes[k] = Object.assign(JSON.parse(JSON.stringify(CLASS_DEFAULTS[k])), cfg.classes[k] || {});
   delete cfg.tf; delete cfg.strategy; delete cfg.model;
+  if (!cfg.dayV) { for (const k of Object.keys(cfg.classes)) if (cfg.classes[k].model.dayStart === 1260) cfg.classes[k].model.dayStart = 1320; cfg.dayV = 1; }
   function classOf(def) {
     if (def.src === 'binance') return 'metals';
     if (def.group === 'Commodities' && /XAU|XAG|XPT|XPD/.test(def.sym)) return 'metals';
@@ -1952,6 +2031,9 @@ const AF = (() => {
     return 'other';
   }
   const ccfg = inst => cfg.classes[classOf(inst.def)];
+  const isWeekend = t => { const d = new Date(t), wd = d.getUTCDay(), h = d.getUTCHours(); return wd === 6 || (wd === 5 && h >= 22) || (wd === 0 && h < 22); };
+  const brokerHours = inst => classOf(inst.def) === 'metals';
+  const tradeable = (inst, t) => !brokerHours(inst) || !isWeekend(t);
   const tfOf = inst => ccfg(inst).tf;
   cfg.frvp = Object.assign({ range: 'rolling', sessStart: 0, sessEnd: 0, rows: 24, maxBars: 2500, vaPct: 70, intrabar: false, recentBars: 10, buySell: true, width: 20, table: true,
     hvn: true, hvnPct: 70, hvnGap: 2, hvnMax: 6, lvn: false, lvnPct: 15, conf: false, confDays: 5, confPct: 0.3, naked: false, nakedN: 3, alertHvn: false }, cfg.frvp || {});
@@ -2035,7 +2117,7 @@ const AF = (() => {
   }
   function sigText(kind, t) {
     const f = x => x.toFixed(t.dec), side = t.dir > 0 ? 'BUY' : 'SELL', u = byId[t.mk] && byId[t.mk].def.rng ? 'points' : 'pips';
-    if (kind === 'open') return `${side} ${t.label} · ${t.setup} · score ${t.score}\n` +
+    if (kind === 'open') return `${side} ${t.label} · ${t.setup} · quality ${t.score}\n` +
       `Entry ${f(t.entry)} | SL ${f(t.sl0)} | TP1 ${f(t.tp1)} | TP2 ${f(t.tp2)}\n` +
       (t.offset ? `On ${t.broker} MT5 (offset ${t.offset >= 0 ? '+' : ''}${t.offset}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` : '') +
       `Risk ${Math.round(t.risk / t.pip)} ${u} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
@@ -2096,8 +2178,16 @@ const AF = (() => {
     }
     return null;
   }
-  function rollTo(inst, t) { let n = 0; while (inst.S.cur && t >= inst.S.cur.t + inst.S.interval && n++ < 600) closeCurrent(inst); }
+  function rollTo(inst, t) {
+    let n = 0;
+    while (inst.S.cur && t >= inst.S.cur.t + inst.S.interval && n++ < 600) {
+      const c = inst.S.cur;
+      if (!tradeable(inst, c.t) && c.v === 0) { const iv = inst.S.interval, nx = Math.floor(t / iv) * iv; if (!tradeable(inst, nx)) return; c.t = nx; continue; }
+      closeCurrent(inst);
+    }
+  }
   function ingest(inst, p, q, sellerAgg, t) {
+    if (!tradeable(inst, t)) { inst.lastTick = Date.now(); return; }
     rollTo(inst, t);
     const b = inst.S.cur; if (!b || t < b.t) return;
     b.c = p; if (p > b.h) b.h = p; if (p < b.l) b.l = p;
@@ -2124,6 +2214,7 @@ const AF = (() => {
     const S_ = storeFor(inst); readParams(S_.params, inst);
     let forming = null;
     const iv = S_.interval;
+    bars = bars.filter(b => tradeable(inst, b.t));
     for (const b of bars) { if (b.t + iv > nowMs) { forming = b; continue; } AF.closeBar(S_, b); }
     S_.liveFrom = S_.bars.length;
     inst.S = S_; syncEngine(inst);
@@ -2745,7 +2836,7 @@ const AF = (() => {
     // the bar index is when the signal bar opened; the signal fires at its close
     s.trades = closed.map(t => ({ t: t.t + T.interval, exitT: t.exitIdx != null && T.bars[t.exitIdx] ? T.bars[t.exitIdx].t + T.interval : null, dir: t.dir, setup: t.setup,
       entry: t.entry, sl: t.sl0, tp1: t.tp1, tp2: t.tp2, tp1Name: t.tp1Name, tp2Name: t.tp2Name, risk: t.risk, net: t.result - params.costPrice / t.risk, status: t.status,
-      zone: fd(t, 'zone'), liq: fd(t, 'liq'), dec: T.dec, pip: T.pip }));
+      zone: [fd(t, 'zone'), fd(t, 'align'), fd(t, 'confirm')].filter(Boolean).join(' '), liq: fd(t, 'liq'), q: t.score, dec: T.dec, pip: T.pip }));
     return s;
   }
   // ---- trade list for one tested version, so a trader can review each signal on their own chart
@@ -2755,18 +2846,19 @@ const AF = (() => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
     const list = pick[2].trades || [], f = (t, x) => x.toFixed(t.dec), filt = $('#histShow').value;
     const shown = list.filter(t => filt === 'all' || (filt === 'loss' ? t.net < -0.05 : t.net > 0.05)).slice().reverse();
-    $('#histTradesBody').innerHTML = shown.map(t => `<tr><td class="num">${list.indexOf(t) + 1}</td><td class="num">${localTime(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td class="num">${f(t, t.entry)}</td><td class="num">${f(t, t.sl)}</td><td class="num">${f(t, t.tp1)}</td><td class="num">${f(t, t.tp2)}</td><td class="num ${t.net >= 0 ? 'up' : 'down'}">${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}R</td><td>${esc(t.status)}</td><td class="why">${esc(t.zone)} ${esc(t.liq)}</td></tr>`).join('')
-      || '<tr><td colspan="10" class="muted">No trades in this filter.</td></tr>';
+    $('#histTradesBody').innerHTML = shown.map(t => `<tr><td class="num">${list.indexOf(t) + 1}</td><td class="num">${localTime(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td class="num">${f(t, t.entry)}</td><td class="num">${f(t, t.sl)}</td><td class="num">${f(t, t.tp1)}</td><td class="num">${f(t, t.tp2)}</td><td class="num ${t.net >= 0 ? 'up' : 'down'}">${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}R</td><td class="num">${t.q}</td><td>${esc(t.status)}</td><td class="why">${esc(t.zone)} ${esc(t.liq)}</td></tr>`).join('')
+      || '<tr><td colspan="11" class="muted">No trades in this filter.</td></tr>';
     const w = list.filter(t => t.net > 0.05).length, l = list.filter(t => t.net < -0.05).length;
-    $('#histTradesMsg').textContent = `${pick[0]} on ${histMarket}: ${list.length} trades, ${w} winners, ${l} losers. Times are your local time; prices are the data feed's, so your broker's chart can differ by a few points.`;
+    const band = (lo, hi, name) => { const g = list.filter(t => t.q >= lo && t.q < hi); if (!g.length) return `${name}: none`; const ww = g.filter(t => t.net > 0.05).length, avg = g.reduce((a, t) => a + t.net, 0) / g.length; return `${name}: ${g.length} trades, ${Math.round(100 * ww / g.length)}% won, ${avg >= 0 ? '+' : ''}${avg.toFixed(2)}R each`; };
+    $('#histTradesMsg').textContent = `${pick[0]} on ${histMarket}: ${list.length} trades, ${w} winners, ${l} losers. By setup quality: ${band(80, 999, 'A+ (80+)')} · ${band(65, 80, 'A (65–79)')} · ${band(0, 65, 'B (under 65)')}. Times are your local time; prices are the data feed's, so your broker's chart can differ by a few points.`;
     $('#histTrades').hidden = false;
   }
   $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
   $('#histCsv').onclick = () => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
-    const head = 'number,local_time,utc_time,side,entry,stop,tp1,tp1_level,tp2,tp2_level,result_R_after_costs,outcome,zone,liquidity,your_verdict,your_reason\n';
+    const head = 'number,local_time,utc_time,side,entry,stop,tp1,tp1_level,tp2,tp2_level,result_R_after_costs,quality,outcome,zone,liquidity,your_verdict,your_reason\n';
     const q = s => `"${String(s).replace(/"/g, '""')}"`;
-    const body = pick[2].trades.map((t, i) => [i + 1, q(localTime(t.t)), new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.entry.toFixed(t.dec), t.sl.toFixed(t.dec), t.tp1.toFixed(t.dec), q(t.tp1Name), t.tp2.toFixed(t.dec), q(t.tp2Name), t.net.toFixed(2), q(t.status), q(t.zone), q(t.liq), '', ''].join(',')).join('\n');
+    const body = pick[2].trades.map((t, i) => [i + 1, q(localTime(t.t)), new Date(t.t).toISOString(), t.dir > 0 ? 'BUY' : 'SELL', t.entry.toFixed(t.dec), t.sl.toFixed(t.dec), t.tp1.toFixed(t.dec), q(t.tp1Name), t.tp2.toFixed(t.dec), q(t.tp2Name), t.net.toFixed(2), t.q, q(t.status), q(t.zone), q(t.liq), '', ''].join(',')).join('\n');
     saveFile(new Blob([head + body], { type: 'text/csv' }), `aurum-${histMarket.toLowerCase()}-${pick[0].replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`);
   };
   let histBusy = false;
@@ -2774,17 +2866,17 @@ const AF = (() => {
     if (histBusy || !live || !cur.S) return; histBusy = true; $('#histRun').disabled = true;
     const inst = cur, say = m => { $('#histMsg').textContent = m; }, days = +$('#histDays').value;
     try {
-      const m1 = await historyBars(inst, days, say);
+      const m1 = (await historyBars(inst, days, say)).filter(b => tradeable(inst, b.t));
       if (m1.length < 500) throw new Error('not enough history came back');
       const base = { ...inst.S.params }; readParams(base, inst);
       const res = [], splitT = m1[0].t + (m1[m1.length - 1].t - m1[0].t) * 2 / 3;
       if (base.strategy === 'frvp') {
-        const flow = inst.def.src === 'binance', grid = [];
+        const grid = [];
         for (const tf of [15, 5]) {
-          grid.push([`${tf}m · liquidity required`, tf, { sweep: true, delta: false }]);
-          grid.push([`${tf}m · no liquidity rule`, tf, { sweep: false, delta: false }]);
-          if (flow) grid.push([`${tf}m · liquidity + delta agrees`, tf, { sweep: true, delta: true }]);
-          grid.push([`${tf}m · liquidity · all out at TP1`, tf, { sweep: true, delta: false, exit: 'tp1' }]);
+          grid.push([`${tf}m · v1 current rules`, tf, { sweep: true, delta: false, align: false, confirm: false }]);
+          grid.push([`${tf}m · + 15m & 1H structure`, tf, { sweep: true, delta: false, align: true, confirm: false }]);
+          grid.push([`${tf}m · + retest confirmation`, tf, { sweep: true, delta: false, align: false, confirm: true }]);
+          grid.push([`${tf}m · v2 structure + retest`, tf, { sweep: true, delta: false, align: true, confirm: true }]);
         }
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
@@ -2794,7 +2886,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !v.tpo && (v.exit || 'split') === (base.model.exit || 'split')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -2805,7 +2897,7 @@ const AF = (() => {
       $('#histPick').innerHTML = res.map(r => `<option${r === mine ? ' selected' : ''}>${esc(r[0])}</option>`).join('');
       renderHistTrades();
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
-      say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile, CISD trigger, minimum ${base.model.minRR}R to TP2).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
+      say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile from ${hhmm(base.model.dayStart)} UTC, CISD trigger, minimum ${base.model.minRR}R to TP2${brokerHours(inst) ? ', broker weekend skipped' : ''}).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
     histBusy = false; $('#histRun').disabled = false;
   };
@@ -2830,7 +2922,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split';
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm;
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -2842,9 +2934,9 @@ const AF = (() => {
   $('#rerun').onclick = () => rebuildAll();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = () => {
-    const [h, m] = ($('#mdDay').value || '21:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value };
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = () => {
+    const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
