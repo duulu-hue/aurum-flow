@@ -2462,9 +2462,7 @@ const AF = (() => {
   ];
   const DEFAULT_DERIV = [
     { id: 'DER:frxEURUSD', src: 'deriv', sym: 'frxEURUSD', label: 'EURUSD', name: 'EUR/USD', group: 'Forex', pip: 0.0001, dec: 5, cost: 1 },
-    { id: 'DER:frxGBPUSD', src: 'deriv', sym: 'frxGBPUSD', label: 'GBPUSD', name: 'GBP/USD', group: 'Forex', pip: 0.0001, dec: 5, cost: 1.2 },
-    { id: 'DER:frxUSDJPY', src: 'deriv', sym: 'frxUSDJPY', label: 'USDJPY', name: 'USD/JPY', group: 'Forex', pip: 0.01, dec: 3, cost: 1.2 },
-    { id: 'DER:R_75', src: 'deriv', sym: 'R_75', label: 'V75', name: 'Volatility 75 Index', group: 'Synthetics', rng: true, cost: 0 }
+    { id: 'DER:frxGBPUSD', src: 'deriv', sym: 'frxGBPUSD', label: 'GBPUSD', name: 'GBP/USD', group: 'Forex', pip: 0.0001, dec: 5, cost: 1.2 }
   ];
 
   // ---------------- settings (this device only)
@@ -2472,6 +2470,8 @@ const AF = (() => {
   if (typeof cfg.offset === 'number') { cfg.offsets['BIN:XAUUSDT'] = cfg.offset; } delete cfg.offset;
   if (typeof cfg.cost === 'number') { cfg.costs['BIN:XAUUSDT'] = cfg.cost; } delete cfg.cost;
   if (!Array.isArray(cfg.added)) cfg.added = DEFAULT_DERIV.map(d => ({ ...d }));
+  // only the four markets that have been tested are scanned by default: gold, silver, and EURUSD and GBPUSD (experimental)
+  if (!cfg.fourV) { cfg.added = cfg.added.filter(d => d.id === 'DER:frxEURUSD' || d.id === 'DER:frxGBPUSD'); for (const d of DEFAULT_DERIV) if (!cfg.added.some(x => x.id === d.id)) cfg.added.push({ ...d }); cfg.sel = 'BIN:XAUUSDT'; cfg.fourV = 1; setTimeout(() => saveCfg()); }
   const allDefs = () => BINANCE_MARKETS.concat(cfg.added);
   for (const m of allDefs()) if (cfg.enabled[m.id] === undefined) cfg.enabled[m.id] = m.on !== false;
   Object.defineProperty(cfg, 'offset', { get: () => cfg.offsets[cur.def.id] || 0, enumerable: false });
