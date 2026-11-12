@@ -1277,7 +1277,7 @@ const AF = (() => {
           setup: `FRVP 15m order block ${up ? 'long' : 'short'}`, limitFill: true, hasTrigger: true, hasLocation: true, blocked: false, offHours: false, why: null, plan: plan3, swept: false, bWhy };
       }
       return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: ref, sl, risk, tp1: t1 ? t1[0] : ref + d * risk, tp1Name: t1 ? t1[1] : '1R', tp2: t2 ? t2[0] : ref + d * 2 * risk, tp2Name: t2 ? t2[1] : '2R', rr1, rr2,
-        setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, bWhy, limitFill: obFill && arm.ob.mode === 'limit', hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
+        setup: `FRVP ${zName || 'zone'} ${up ? 'long' : 'short'}`, lv: cands.filter(c => d * (c[0] - ref) >= 1.0 * risk).map(c => c[0]), bWhy, limitFill: obFill && arm.ob.mode === 'limit', hasTrigger: cl != null, hasLocation: !!zone, blocked: false, offHours: !inHours, why, plan, swept: !!swept };
     };
     const long = side(1), short = side(-1);
     let pick = null; for (const c of [long, short]) if (c.fire && (!pick || c.score > pick.score)) pick = c;
@@ -1468,13 +1468,13 @@ const AF = (() => {
       (exitModeOf(S) === 'tp1' ? `Take the whole position at TP1. Never widen the stop.` : `Bank half at TP1 and move the stop to breakeven. Never widen the stop.`);
   }
 
-  const exitModeOf = S => (S.params && S.params.strategy === 'frvp' && S.params.model && S.params.model.exit === 'tp1') ? 'tp1' : 'split';
+  const exitModeOf = S => { const x = S.params && S.params.strategy === 'frvp' && S.params.model && S.params.model.exit; return ['tp1', 'ladder', 'trail', 'ladder3'].includes(x) ? x : 'split'; };
   function openTrade(S, e, k) {
     const c = e.pick;
     const t = {
       id: S.trades.length + 1, dir: c.dir, setup: c.setup, k, t: S.bars[k].t, entry: c.entry, sl: c.sl, sl0: c.sl,
       tp1: c.tp1, tp2: c.tp2, tp1Name: c.tp1Name, tp2Name: c.tp2Name, risk: c.risk, rr1: c.rr1, rr2: c.rr2, score: c.score,
-      factors: c.factors.map(x => ({ ...x })), tags: c.tags || null, exitMode: exitModeOf(S), stage: 0, realized: 0, status: 'Running', result: null, exitIdx: null, exitPrice: null, pips: null
+      factors: c.factors.map(x => ({ ...x })), tags: c.tags || null, exitMode: exitModeOf(S), lv: c.lv || null, stage: 0, realized: 0, status: 'Running', result: null, exitIdx: null, exitPrice: null, pips: null
     };
     t.narrative = narrate(S, c);
     S.trades.push(t); S.active = t;
@@ -1496,6 +1496,19 @@ const AF = (() => {
     const hit = p => d > 0 ? b.h >= p : b.l <= p;
     const stopHit = d > 0 ? b.l <= t.sl : b.h >= t.sl;
     const R = p => d * (p - t.entry) / t.risk;
+    if (['ladder', 'trail', 'ladder3'].includes(t.exitMode) && t.lv && t.lv.length) {
+      // scale out in equal parts at each key level in turn (up to 5, or 3), at least 0.3R apart
+      if (!t.L) { const mx = t.exitMode === 'ladder3' ? 3 : 5; t.L = []; for (const p of t.lv) { if (t.L.length < mx && (!t.L.length || R(p) - R(t.L[t.L.length - 1]) >= 0.3)) t.L.push(p); } t.li = 0; }
+      const n = t.L.length, part = 1 / n;
+      if (stopHit) return finish(S, t, k, t.realized + (n - t.li) * part * R(t.sl), t.li ? `TP${t.li}, rest stopped` : 'Stopped out', t.sl);
+      while (t.li < n && hit(t.L[t.li])) {
+        t.realized += part * R(t.L[t.li]); t.li++; t.stage = 1; if (t.li === 1) t.tp1Idx = k;
+        t.sl = t.exitMode === 'trail' && t.li >= 2 ? t.L[t.li - 2] : t.entry;
+      }
+      if (t.li >= n) return finish(S, t, k, t.realized, `All ${n} targets hit`, t.L[n - 1]);
+      if (k - t.k >= Math.max(20, Math.round(24 * 3600e3 / S.interval))) finish(S, t, k, t.realized + (n - t.li) * part * R(b.c), 'Timed out', b.c);
+      return;
+    }
     if (t.stage === 0) {
       if (stopHit) return finish(S, t, k, -1, 'Stopped out', t.sl);
       if (hit(t.tp1)) {
@@ -3292,22 +3305,20 @@ const AF = (() => {
         }
         else for (const tf of [15, 5]) {
           if (tf !== 5) continue;
-          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '' };
-          // the playbook: every distinct way of entering we have built. The auto rows below pick between them.
-          grid.push([`5m · retest + delta agrees`, tf, { ...o }]);
-          grid.push([`5m · v1 rules (no retest, no delta)`, tf, { ...o, delta: false, confirm: false }]);
-          grid.push([`5m · POC only with VWAP on it`, tf, { ...o, vwz: 'poc' }]);
-          grid.push([`5m · London only (06–12 UTC)`, tf, { ...o, win: 'ldn' }]);
-          grid.push([`5m · + 4H continuation setup`, tf, { ...o, cont: true }]);
-          grid.push([`5m · breathing space + MSS`, tf, { ...o, base: true }]);
-          grid.push([`5m · order block return (limit)`, tf, { ...o, ob: 'limit' }]);
-          grid.push([`5m · + 15m order block with any FRVP level`, tf, { ...o, obz: 'any' }]);
+          // exit test: the entry rules are this market's own settings; only the way profit is taken changes
+          const o = { ...base.model, exit: 'split', tp2: 'far' };
+          grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
+          grid.push([`5m · half at TP1, rest to the nearest level 2.5R+ away`, tf, { ...o, tp2: 'near' }]);
+          grid.push([`5m · all out at TP1 (nearest liquidity)`, tf, { ...o, exit: 'tp1' }]);
+          grid.push([`5m · TP1 to TP3: a third at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder3' }]);
+          grid.push([`5m · TP1 to TP5: equal parts at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder' }]);
+          grid.push([`5m · TP1 to TP5, stop trails one level behind`, tf, { ...o, exit: 'trail' }]);
         }
         histCtx = { inst, m1, base, grid };
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
-        if (!fx && res.length > 1) {
+        if (false && !fx && res.length > 1) {
           const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.slice();
           for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
@@ -3338,7 +3349,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (!v.auto && v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base && (v.vwz || '') === (base.model.vwz || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (!v.auto && v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base && (v.vwz || '') === (base.model.vwz || '') && (fx || ((v.exit || 'split') === (base.model.exit || 'split') && (v.tp2 || 'far') === (base.model.tp2 || 'far')))) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
