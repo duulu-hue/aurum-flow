@@ -55,6 +55,8 @@ canvas#chart{display:block;width:100%;height:100%;touch-action:pan-y;cursor:cros
 .legend{position:absolute;left:10px;top:8px;font-family:var(--f-mono);font-size:11px;color:var(--muted);pointer-events:none;display:flex;gap:10px;flex-wrap:wrap;max-width:calc(100% - 90px)}
 .legend b{color:var(--fg);font-weight:500}
 .hint{position:absolute;right:76px;bottom:30px;font-size:11px;color:var(--faint);pointer-events:none}
+.enginecfg{margin-top:14px}.enginecfg .clsbox{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px 24px;align-items:start}.enginecfg .clsbox>*{margin:0}.enginecfg .clsbox .clshead,.enginecfg .clsbox .hintp,.enginecfg .clsbox .cls-status{grid-column:1/-1}
+.belowchart{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px;align-items:start}@media (max-width:760px){.belowchart{grid-template-columns:minmax(0,1fr)}}
 .side{display:flex;flex-direction:column;gap:14px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
 .card h3{margin:0 0 10px;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
@@ -326,6 +328,10 @@ tr.open td{background:var(--gold-soft)}
       <div class="legend" id="legend"></div>
       <div class="hint" id="hint">Drag to pan · wheel to zoom · double-click for live</div>
     </div>
+    <div class="belowchart">
+    <div class="card"><h3>Market read</h3><dl class="read" id="read"></dl></div>
+    <div class="card" id="domCard"><h3>Depth of market</h3><div class="dom" id="dom"></div></div>
+    </div>
   </section>
 
   <aside class="side">
@@ -338,6 +344,12 @@ tr.open td{background:var(--gold-soft)}
         <button type="button" id="caseL" aria-pressed="true">Long case</button><button type="button" id="caseS" aria-pressed="false">Short case</button>
       </div>
       <ul class="factors" id="factors"></ul>
+    </div>
+  </aside>
+</div>
+
+<section class="card enginecfg" id="engineCfg">
+  <h3>Engine settings</h3>
       <div class="clsbox">
         <div class="clshead"><span>Settings for <b id="clsName">Metals</b></span><button type="button" class="linkbtn" id="clsReset">Reset to tested defaults</button></div>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ownChk" style="accent-color:var(--gold)"> <span id="ownLbl">Own settings for this market</span></label>
@@ -403,11 +415,7 @@ tr.open td{background:var(--gold-soft)}
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useHTF" checked style="accent-color:var(--gold)"> HTF structure</label>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="useRegime" checked style="accent-color:var(--gold)"> Day-type filter</label>
       </div>
-    </div>
-    <div class="card"><h3>Market read</h3><dl class="read" id="read"></dl></div>
-    <div class="card" id="domCard"><h3>Depth of market</h3><div class="dom" id="dom"></div></div>
-  </aside>
-</div>
+</section>
 
 <section class="lower">
   <div class="tabs" role="tablist">
