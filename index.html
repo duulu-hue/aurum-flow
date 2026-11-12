@@ -347,7 +347,7 @@ tr.open td{background:var(--gold-soft)}
       </div>
       <div class="thrrow">
         <label for="stratSel">Strategy</label>
-        <select id="stratSel"><option value="frvp">Your FRVP model</option><option value="value">Value-edge engine (old)</option></select>
+        <select id="stratSel"><option value="frvp">Your FRVP model</option><option value="fm">Fractal model (experimental, unproven)</option><option value="value">Value-edge engine (old)</option></select>
       </div>
       <div class="modelOnly">
         <div class="thrrow">
@@ -2316,7 +2316,7 @@ const AF = (() => {
     if (t) {
       const r = live ? signalR(t, lastPrice()) : AF.liveR(S, lastPrice()), dir = t.dir > 0;
       el.innerHTML = `<div class="sig-head"><span class="pill ${dir ? 'long' : 'short'}">${dir ? 'BUY' : 'SELL'}</span><span class="num ${r >= 0 ? 'up' : 'down'}">${r >= 0 ? '+' : ''}${r.toFixed(2)}R ${t.stage ? '· TP1 banked' : '· running'}</span></div>
-        <div class="sig-title">${esc(t.setup)} · ${e && e.model ? `quality ${t.score} (${t.score >= 80 ? 'A+' : t.score >= 65 ? 'A' : 'B'})` : `score ${t.score}`}</div>
+        ${t.exp ? '<div class="cls-status warn" style="margin-bottom:8px"><b>EXPERIMENTAL · UNPROVEN</b>. Demo only. Not tested out of sample.</div>' : ''}<div class="sig-title">${esc(t.setup)} · ${e && e.model ? `quality ${t.score} (${t.score >= 80 ? 'A+' : t.score >= 65 ? 'A' : 'B'})` : `score ${t.score}`}</div>
         <div class="levels">
           <div class="lv"><span>Entry</span><b>${fmt(t.entry)}</b><small>${tfmt(t.t)}</small></div>
           <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
@@ -2508,7 +2508,12 @@ const AF = (() => {
     const c = JSON.parse(JSON.stringify(cfg.classes.metals)); c.model.confirm = false; c.model.delta = false;
     cfg.own['BIN:XAGUSDT'] = c; cfg.ownV = 1; setTimeout(() => saveCfg());
   }
+  if (!cfg.fmV) {   // experimental, unproven: fractal model (CISD inside candle 2, New York session only) on EURUSD and GBPUSD, for demo forward testing
+    for (const id of ['DER:frxEURUSD', 'DER:frxGBPUSD']) { const c = baseCls(); c.strategy = 'fm'; c.tf = 5; c.fm = { early: true, ny: true }; cfg.own[id] = c; cfg.enabled[id] = true; }
+    cfg.fmV = 1; setTimeout(() => saveCfg());
+  }
   const ccfg = inst => cfg.own[inst.def.id] || cfg.classes[classOf(inst.def)];
+  const isExp = id => { const i = byId[id]; return !!(i && ccfg(i).strategy === 'fm'); };
   const isWeekend = t => { const d = new Date(t), wd = d.getUTCDay(), h = d.getUTCHours(); return wd === 6 || (wd === 5 && h >= 22) || (wd === 0 && h < 22); };
   const brokerHours = inst => classOf(inst.def) === 'metals';
   const tradeable = (inst, t) => !brokerHours(inst) || !isWeekend(t);
@@ -2557,8 +2562,8 @@ const AF = (() => {
     const t = {
       id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
       entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2, tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2, exitMode: tr.exitMode || 'split',
-      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + tfOf(inst) * 60000, tf: tfOf(inst), maxMs: Math.max(20 * tfOf(inst) * 60000, (ccfg(inst).strategy === 'frvp' ? 24 : 4) * 3600e3),
-      offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker
+      narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + tfOf(inst) * 60000, tf: tfOf(inst), maxMs: Math.max(20 * tfOf(inst) * 60000, (ccfg(inst).strategy === 'frvp' || ccfg(inst).strategy === 'fm' ? 24 : 4) * 3600e3),
+      offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker, exp: ccfg(inst).strategy === 'fm'
     };
     ledger.push(t); saveLedger(); notify('open', t); journalDirty = panelDirty = true;
   }
@@ -2609,12 +2614,13 @@ const AF = (() => {
   }
   function sigText(kind, t) {
     const f = x => x.toFixed(t.dec), side = t.dir > 0 ? 'BUY' : 'SELL', u = byId[t.mk] && byId[t.mk].def.rng ? 'points' : 'pips';
-    if (kind === 'open') return `${side} ${t.label} · ${t.setup} · quality ${t.score}\n` +
+    const X = t.exp ? '⚠ EXPERIMENTAL · UNPROVEN · demo only\n' : '';
+    if (kind === 'open') return X + `${side} ${t.label} · ${t.setup} · quality ${t.score}\n` +
       `Entry ${f(t.entry)} | SL ${f(t.sl0)} | TP1 ${f(t.tp1)} | TP2 ${f(t.tp2)}\n` +
       (t.offset ? `On ${t.broker} MT5 (offset ${t.offset >= 0 ? '+' : ''}${t.offset}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` : '') +
       `Risk ${Math.round(t.risk / t.pip)} ${u} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n` + (sizeFor(t) ? sizeFor(t).text + '\n' : '') + `\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
-    if (kind === 'tp1') return `TP1 hit: ${side} ${t.label} from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
-    return `${t.status}: ${side} ${t.label} from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} ${u} after costs.`;
+    if (kind === 'tp1') return X + `TP1 hit: ${side} ${t.label} from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
+    return X + `${t.status}: ${side} ${t.label} from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} ${u} after costs.`;
   }
   function notify(kind, t) { tg(sigText(kind, t)); }
 
@@ -3427,7 +3433,7 @@ const AF = (() => {
     try {
       const m1 = (await historyBars(inst, days, say)).filter(b => tradeable(inst, b.t));
       if (m1.length < 500) throw new Error('not enough history came back');
-      const base = { ...inst.S.params }; readParams(base, inst);
+      const base = { ...inst.S.params }; readParams(base, inst); const ownFm = base.strategy === 'fm'; if (ownFm) base.strategy = 'frvp';
       const res = [], splitT = m1[0].t + (m1[m1.length - 1].t - m1[0].t) * 2 / 3;
       if (base.strategy === 'frvp') {
         const grid = [];
@@ -3490,7 +3496,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (!v.auto && v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base && (v.vwz || '') === (base.model.vwz || '') && (classOf(inst.def) === 'forex' || ((v.exit || 'split') === (base.model.exit || 'split') && (v.tp2 || 'far') === (base.model.tp2 || 'far')))) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = (ownFm && res.find(([, v]) => v.fm && v.fm.early && v.fm.ny)) || res.find(([, v]) => base.strategy === 'frvp' ? (!v.auto && v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base && (v.vwz || '') === (base.model.vwz || '') && (classOf(inst.def) === 'forex' || ((v.exit || 'split') === (base.model.exit || 'split') && (v.tp2 || 'far') === (base.model.tp2 || 'far')))) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -3510,14 +3516,14 @@ const AF = (() => {
   const readParams = (P, inst) => {
     inst = inst || cur; const c = ccfg(inst);
     P.threshold = c.threshold; P.lookback = c.lookback; P.trigger = c.trigger; P.useHTF = c.useHTF; P.useRegime = c.useRegime;
-    P.frvp = engineFrvp(); P.strategy = c.strategy; P.model = { ...c.model };
+    P.frvp = engineFrvp(); P.strategy = c.strategy; P.model = { ...c.model }; P.fm = c.fm ? { ...c.fm } : undefined;
     P.hours = (inst.def.rng || inst.def.group === 'Crypto') ? null : { start: cfg.hoursStart, end: cfg.hoursEnd };
     P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01));
   };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
   function rebuildAll(onlyCls) { for (const i of insts) if (i.S && (!onlyCls || classOf(i.def) === onlyCls)) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
   const curCls = () => classOf(cur.def), cc = () => ccfg(cur);
-  function showStrategy() { const mdl = cc().strategy === 'frvp'; document.querySelectorAll('.valueOnly').forEach(x => x.hidden = mdl); document.querySelectorAll('.modelOnly').forEach(x => x.hidden = !mdl); }
+  function showStrategy() { const s = cc().strategy; document.querySelectorAll('.valueOnly').forEach(x => x.hidden = s !== 'value'); document.querySelectorAll('.modelOnly').forEach(x => x.hidden = s !== 'frvp'); }
   // fill the controls from the selected market's type
   function loadControls() {
     const c = cc(), k = curCls(), info = CLASS_INFO[k];
@@ -3527,7 +3533,8 @@ const AF = (() => {
     $('#clsMembers').textContent = own ? `${cur.def.label} has its own settings. Other ${info.name.toLowerCase()} markets are not affected.` : members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#ownChk').checked = own; $('#ownLbl').textContent = `Own settings for ${cur.def.label}`;
     const ownTxt = cur.def.id === 'BIN:XAGUSDT' && !c.model.confirm && !c.model.delta ? 'Tested on 90 days to 12 Nov (5m, v1 rules: no retest, no delta): silver +0.43R per trade over 84 trades, +36.3R after costs, steady. Forward test on demo before trading.' : 'Own settings for this market. Run the History test to see how they did.';
-    $('#clsStatus').textContent = own ? ownTxt : info.status; $('#clsStatus').className = 'cls-status ' + ((own ? /^Tested/.test(ownTxt) : info.proven) ? 'up' : 'warn');
+    const expTxt = 'EXPERIMENTAL · UNPROVEN. Fractal model: 1H candle 2 sweep, CISD inside candle 2, New York session only (15:00–23:00 Nairobi). Chosen on 90 days of EURUSD and GBPUSD (+0.38R and +0.32R), then it failed on USDJPY (-0.05R) and AUDUSD (-0.10R). Demo forward test only: 20–30 live signals will settle it.';
+    $('#clsStatus').textContent = c.strategy === 'fm' ? expTxt : own ? ownTxt : info.status; $('#clsStatus').className = 'cls-status ' + (c.strategy === 'fm' ? 'warn' : (own ? /^Tested/.test(ownTxt) : info.proven) ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
     $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base; $('#mdVwz').value = c.model.vwz || '';
     $('#tfSel').value = String(c.tf);
@@ -3541,7 +3548,7 @@ const AF = (() => {
   $('#rerun').onclick = () => rebuildAll();
   $('#chkBtn').onclick = () => explainMoment();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
-  $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
+  $('#stratSel').onchange = e => { cc().strategy = e.target.value; if (e.target.value === 'fm' && !cc().fm) cc().fm = { early: true, ny: true }; showStrategy(); save(); };
   $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = $('#mdMtf').onchange = $('#mdBase').onchange = $('#mdVwz').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
     cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value, mtfLvl: $('#mdMtf').value, base: $('#mdBase').checked, vwz: $('#mdVwz').value };
