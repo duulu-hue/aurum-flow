@@ -3302,7 +3302,7 @@ const AF = (() => {
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
         if (!fx && res.length > 1) {
           const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t;
-          for (const [lbDays, aside] of [[30, false], [30, true], [14, false]]) {
+          for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
             for (let w = t0; w < t1; w += W) {
               let pick = res[0], best = null;
