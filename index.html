@@ -1300,7 +1300,7 @@ const AF = (() => {
   // back inside; on the entry timeframe the CISD level is the open of the run that made that low (high). The setup is
   // live through candles 3 and 4 and dies if price trades beyond candle 2's extreme. Targets are the indicator's
   // projections: the CISD-to-extreme range measured from the CISD level (-1, -2, -2.5).
-  const FM_DEFAULTS = { htf: 0, tspot: false, tp2: 2, bias: false, c3only: false, maxLate: 0.5 };
+  const FM_DEFAULTS = { htf: 0, tspot: false, tp2: 2, bias: false, c3only: false, early: false, ny: false, maxLate: 0.5 };
   function fmState(S, k) {
     const o = Object.assign({}, FM_DEFAULTS, S.params.fm || {});
     const hm = o.htf || (S.interval <= 5 * 60000 ? 60 : 240), ms = hm * 60000, off = hm >= 240 ? 22 * 3600e3 : 0;
@@ -1377,6 +1377,8 @@ const AF = (() => {
           const late = d * (ref - st.lvl) / Math.max(range, 1e-12);
           if (!inHours) why = null;
           else if (o.c3only && st.phase !== 1) why = 'CISD confirmed only in candle 4; this version trades candle 3 only.';
+          else if (o.early && !st.early) why = 'CISD confirmed after candle 2; this version trades only a CISD inside candle 2.';
+          else if (o.ny && !(new Date(b.t).getUTCHours() >= 12 && new Date(b.t).getUTCHours() < 20)) why = 'Outside the New York session (15:00–23:00 Nairobi); this version trades New York only.';
           else if (o.tspot && !inT) why = tf.detail + ' No entry outside the T-spot side.';
           else if (o.bias && s240 !== want) why = bf.detail;
           else if (late > o.maxLate) why = `CISD confirmed, but price is already ${late.toFixed(1)} ranges past the level. Too late to chase.`;
@@ -3434,13 +3436,12 @@ const AF = (() => {
         if (fmk) {
           // forex and crypto: the fractal model (price only, needs no volume), against the current FRVP rules
           grid.push([`5m · current FRVP rules`, 5, { sweep: true, delta: false, align: false, confirm: false }]);
-          for (const tf of [5, 15]) {
-            const h = tf === 5 ? '1H' : '4H';
+          for (const tf of [5]) {
+            const h = '1H';
             grid.push([`${tf}m–${h} fractal model · entry on CISD`, tf, { fm: {} }]);
-            grid.push([`${tf}m–${h} fractal model · candle 3 only`, tf, { fm: { c3only: true } }]);
-            grid.push([`${tf}m–${h} fractal model · T-spot side only`, tf, { fm: { tspot: true } }]);
-            grid.push([`${tf}m–${h} fractal model · with higher-timeframe structure`, tf, { fm: { bias: true } }]);
-            grid.push([`${tf}m–${h} fractal model · TP2 at projection -2.5`, tf, { fm: { tp2: 2.5 } }]);
+            grid.push([`${tf}m–${h} fractal model · CISD inside candle 2 only`, tf, { fm: { early: true } }]);
+            grid.push([`${tf}m–${h} fractal model · New York only`, tf, { fm: { ny: true } }]);
+            grid.push([`${tf}m–${h} fractal model · candle 2 only + New York only`, tf, { fm: { early: true, ny: true } }]);
           }
         }
         else for (const tf of [15, 5]) {
