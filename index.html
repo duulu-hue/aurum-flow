@@ -334,7 +334,7 @@ tr.open td{background:var(--gold-soft)}
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ownChk" style="accent-color:var(--gold)"> <span id="ownLbl">Own settings for this market</span></label>
         <p class="hintp" id="clsMembers"></p>
         <p class="cls-status" id="clsStatus"></p>
-        <p class="hintp">Each market type keeps its own settings. Click a market in the strip to change its type's settings.</p>
+        <p class="hintp">Each market type keeps its own settings, and a market can have its own with the tick box above. Click a market in the strip to see or change what it uses.</p>
       </div>
       <div class="thrrow">
         <label for="stratSel">Strategy</label>
@@ -2352,7 +2352,7 @@ const AF = (() => {
   const saveCfg = () => LS.set('cfg', cfg);
   // settings are kept per market type; tested values become the starting point for each type
   const CLASS_INFO = {
-    metals: { name: 'Metals', status: 'Tested on 90 days (5m, retest + delta agrees): gold +0.38R per trade over 45 trades, silver +0.34R over 48, after costs. Forward test on demo before trading.', proven: true },
+    metals: { name: 'Metals', status: 'Tested on 90 days to 12 Nov (5m, retest + delta agrees): gold +0.27R per trade over 50 trades, +13.3R after costs, steady. Forward test on demo before trading.', proven: true },
     forex: { name: 'Forex', status: 'Not proven. On 90 days no forex setting held up on both EURUSD and GBPUSD. Signals are for testing only.', proven: false },
     crypto: { name: 'Crypto', status: 'Not tested yet. Run the History test before trusting a signal.', proven: false },
     synthetics: { name: 'Synthetic indices', status: 'Not tested yet. These prices are random by design; run the History test before trusting a signal.', proven: false },
@@ -3374,7 +3374,8 @@ const AF = (() => {
     $('#clsName').textContent = own ? `${cur.def.label} only` : info.name;
     $('#clsMembers').textContent = own ? `${cur.def.label} has its own settings. Other ${info.name.toLowerCase()} markets are not affected.` : members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#ownChk').checked = own; $('#ownLbl').textContent = `Own settings for ${cur.def.label}`;
-    $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
+    const ownTxt = cur.def.id === 'BIN:XAGUSDT' && !c.model.confirm && !c.model.delta ? 'Tested on 90 days to 12 Nov (5m, v1 rules: no retest, no delta): silver +0.43R per trade over 84 trades, +36.3R after costs, steady. Forward test on demo before trading.' : 'Own settings for this market. Run the History test to see how they did.';
+    $('#clsStatus').textContent = own ? ownTxt : info.status; $('#clsStatus').className = 'cls-status ' + ((own ? /^Tested/.test(ownTxt) : info.proven) ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
     $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base; $('#mdVwz').value = c.model.vwz || '';
     $('#tfSel').value = String(c.tf);
