@@ -354,6 +354,7 @@ tr.open td{background:var(--gold-soft)}
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdFree" style="accent-color:var(--gold)"> A runner at breakeven gives way to a new signal</label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdOneTry" style="accent-color:var(--gold)"> No second try on a side after a stop-out (same day)</label>
           <label style="display:flex;align-items:center;gap:6px">TP2 <select id="mdTp2"><option value="far">farthest key level</option><option value="near">nearest key level past the minimum</option></select></label>
+          <label style="display:flex;align-items:center;gap:6px">VWAP on the zone <select id="mdVwz"><option value="">not required</option><option value="poc">required for POC trades</option><option value="all">required for every zone</option></select></label>
           <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mdBase" style="accent-color:var(--gold)"> Breathing space: hold 30 min, new node, MSS, limit at the node</label>
           <label style="display:flex;align-items:center;gap:6px">Level confirmed on <select id="mdMtf"><option value="">entry profile only</option><option value="30">the 30m profile too</option><option value="both">the 15m and 30m profiles too</option></select></label>
           <label style="display:flex;align-items:center;gap:6px">15m order block setup <select id="mdObz"><option value="">off</option><option value="hvn">with an HVN inside</option><option value="any">with any FRVP level inside</option></select></label>
@@ -705,7 +706,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '' };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -1022,10 +1023,13 @@ const AF = (() => {
         const hits = need.map(mins => { const q = ml[mins]; if (!q) return null; const h = q.lv.filter(x => Math.abs(x[0] - zone.price) <= 0.75 * Math.max(q.rowH, prof.rowH)).sort((x, y) => Math.abs(x[0] - zone.price) - Math.abs(y[0] - zone.price))[0]; return h ? `${mins}m ${h[1]} ${f(h[0])}` : null; });
         mtfOk = hits.every(Boolean); mtfTxt = mtfOk ? `The same level is a key level on the ${hits.join(' and ')} profile.` : `The ${zone.name} is not a key level on the ${need.join('m and ')}m profile.`;
       }
+      // VWAP confluence: the session VWAP sits on the zone (within 0.3 ATR)
+      const vwAt = !!(zone && vw != null && isFinite(vw) && Math.abs(vw - zone.price) <= 0.3 * atr);
+      const vwOk = !m.vwz || (m.vwz === 'all' ? vwAt : (zone && zone.name !== 'POC') || vwAt);
       const flowOk = !m.delta || of.na || of.pts > 0, c4Ok = !m.htf || (m.htf === 'only' ? c4dir === d : c4dir !== -d), alignOk = (!m.align || aligned) && (!m.bias || verdict === want) && c4Ok;
       // with the retest on, delta is judged on the retest bar (the entry), not on the setup bar
       const retry = m.oneTry && lossDay[d] === dayKey;
-      const trigger = !m.base && !chop && !retry && mtfOk && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
+      const trigger = !m.base && !chop && !retry && mtfOk && vwOk && !!zone && cl != null && (swept || !m.sweep) && (m.confirm || flowOk) && alignOk;
 
       // entry: straight on the trigger, or after a retest of the zone that is rejected (the user's confirmation)
       let entry = null, beyond = null, confirmed = false, arm = S._arm[d];
@@ -1213,6 +1217,7 @@ const AF = (() => {
       else if (m.bias && verdict !== want) why = tdText;
       else if (m.confirm && S._arm[d] && !confirmed) why = qf.detail;
       else if (zone && !mtfOk) why = mtfTxt;
+      else if (zone && !vwOk) why = `VWAP ${f(vw)} is not at the ${zone.name}. ${m.vwz === 'all' ? 'Only zones with VWAP on them are traded.' : 'POC trades need VWAP on the POC.'}`;
       else if (!zone) why = `Price is not at an FRVP zone. ${up ? 'Longs' : 'Shorts'} start at ${m.noPoc ? '' : 'the POC, '}${up ? 'a support HVN or VAL' : 'a resistance HVN or VAH'}.`;
       else if (m.align && !aligned) why = sf.detail;
       else if (m.sweep && !swept) why = `At the ${zone.name}, but ${lf.detail.charAt(0).toLowerCase() + lf.detail.slice(1)}`;
@@ -1231,6 +1236,7 @@ const AF = (() => {
         delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
         h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against', c4: c4dir === d ? 'with' : c4dir ? 'against' : 'no setup' };
       if (mtfOk && mtfTxt && zone) zf.detail = zDetail0 + ' ' + mtfTxt;
+      tags.vwap = vwAt ? 'on the zone' : 'away'; if (vwAt && zone) zf.detail += ` VWAP ${f(vw)} sits on the zone.`;
       tags.setup = 'reversal'; tags.entry = obFill ? 'order block' : m.confirm ? 'retest' : 'CISD';
       if (B2) {
         const g = B2.gap;
@@ -3181,7 +3187,7 @@ const AF = (() => {
     if (!v) { out.innerHTML = '<p class="hintp">Pick a date and time first.</p>'; return; }
     const g = histCtx.grid.find(x => x[0] === $('#histPick').value) || histCtx.grid[0];
     const [, tf, mo] = g, t0 = new Date(v).getTime(), a = t0 - 30 * 60000, z = t0 + 90 * 60000;
-    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, ...mo } };
+    const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo } };
     out.innerHTML = '<p class="hintp">Replaying…</p>'; await new Promise(r => setTimeout(r));
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tf * 60000, htfMult: HTF_MULT[tf] });
     Object.assign(T.params, params);
@@ -3235,7 +3241,7 @@ const AF = (() => {
     const withTags = list.filter(t => t.tags); if (!withTags.length) { $('#histBreak').innerHTML = ''; return; }
     const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
     const groups = [
-      ['Setup', t => t.tags.setup], ['Entry', t => t.tags.entry], ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
+      ['Setup', t => t.tags.setup], ['Entry', t => t.tags.entry], ['VWAP', t => t.tags.vwap], ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
       ['Session', sess], ['4H candle model', t => t.tags.c4], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
       ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
     ];
@@ -3279,15 +3285,14 @@ const AF = (() => {
         }
         else for (const tf of [15, 5]) {
           if (tf !== 5) continue;
-          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false };
+          const o = { sweep: true, delta: true, align: false, confirm: true, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '' };
           grid.push([`5m · retest + delta agrees`, tf, { ...o }]);
-          grid.push([`5m · breathing space: hold 30 min, new node, MSS, limit at node`, tf, { ...o, base: true }]);
-          grid.push([`5m · breathing space + level confirmed on 30m profile`, tf, { ...o, base: true, mtfLvl: '30' }]);
-          grid.push([`5m · + level confirmed on the 30m profile`, tf, { ...o, mtfLvl: '30' }]);
-          grid.push([`5m · + level confirmed on 15m and 30m profiles`, tf, { ...o, mtfLvl: 'both' }]);
+          grid.push([`5m · + POC trades only with VWAP on the POC`, tf, { ...o, vwz: 'poc' }]);
+          grid.push([`5m · + only zones with VWAP on them`, tf, { ...o, vwz: 'all' }]);
+          grid.push([`5m · v1 rules (no retest, no delta) + only zones with VWAP`, tf, { ...o, delta: false, confirm: false, vwz: 'all' }]);
         }
         histCtx = { inst, m1, base, grid };
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
       } else for (const tf of [1, 3, 5, 15]) {
         const bars = aggregate(m1, tf);
         for (const onOff of [true, false]) {
@@ -3295,7 +3300,7 @@ const AF = (() => {
           res.push([name, { tf, useRegime: onOff }, await runVariant(inst, bars, { ...base, useRegime: onOff }, say, name, days, tf, splitT)]);
         }
       }
-      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
+      const mine = res.find(([, v]) => base.strategy === 'frvp' ? (v.tf === tfOf(inst) && v.sweep === base.model.sweep && v.delta === base.model.delta && !!v.align === !!base.model.align && !!v.confirm === !!base.model.confirm && !!v.noPoc === !!base.model.noPoc && biasKey(v.bias) === biasKey(base.model.bias) && (v.htf || '') === (base.model.htf || '') && !!v.cont === !!base.model.cont && !!v.free === !!base.model.free && (v.tp2 || 'far') === (base.model.tp2 || 'far') && !!v.oneTry === !!base.model.oneTry && (v.win || '') === (base.model.win || '') && (v.ob || '') === (base.model.ob || '') && (v.obz || '') === (base.model.obz || '') && (v.mtfLvl || '') === (base.model.mtfLvl || '') && !!v.base === !!base.model.base && (v.vwz || '') === (base.model.vwz || '')) : (v.tf === tfOf(inst) && v.useRegime === base.useRegime)) || [null, null, null];
       const sR = x => `${x >= 0 ? '+' : ''}${x.toFixed(2)}R`, cls = x => x >= 0 ? 'up' : 'down';
       const steady = s => s.n >= 30 && s.e1 !== null && s.e2 !== null && s.e1 >= 0.1 && s.e2 >= 0.1;
       const best = res.filter(r => steady(r[2])).sort((a, b) => b[2].exp - a[2].exp)[0];
@@ -3331,7 +3336,7 @@ const AF = (() => {
     $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
-    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base;
+    $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base; $('#mdVwz').value = c.model.vwz || '';
     $('#tfSel').value = String(c.tf);
     $('#thr').value = c.threshold; $('#thrv').textContent = c.threshold; $('#lookback').value = String(c.lookback);
     $('#trigMode').value = c.trigger; $('#useHTF').checked = c.useHTF; $('#useRegime').checked = c.useRegime;
@@ -3344,9 +3349,9 @@ const AF = (() => {
   $('#chkBtn').onclick = () => explainMoment();
   $('#trigMode').onchange = $('#useHTF').onchange = $('#useRegime').onchange = () => { Object.assign(cc(), { trigger: $('#trigMode').value, useHTF: $('#useHTF').checked, useRegime: $('#useRegime').checked }); save(); };
   $('#stratSel').onchange = e => { cc().strategy = e.target.value; showStrategy(); save(); };
-  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = $('#mdMtf').onchange = $('#mdBase').onchange = () => {
+  $('#mdDay').onchange = $('#mdSweep').onchange = $('#mdChop').onchange = $('#mdDelta').onchange = $('#mdRR').onchange = $('#mdExit').onchange = $('#mdAlign').onchange = $('#mdConfirm').onchange = $('#mdNoPoc').onchange = $('#mdBias').onchange = $('#mdHtf').onchange = $('#mdCont').onchange = $('#mdFree').onchange = $('#mdTp2').onchange = $('#mdOneTry').onchange = $('#mdWin').onchange = $('#mdOb').onchange = $('#mdObz').onchange = $('#mdMtf').onchange = $('#mdBase').onchange = $('#mdVwz').onchange = () => {
     const [h, m] = ($('#mdDay').value || '22:00').split(':').map(Number);
-    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value, mtfLvl: $('#mdMtf').value, base: $('#mdBase').checked };
+    cc().model = { dayStart: ((h || 0) * 60 + (m || 0)) % 1440, sweep: $('#mdSweep').checked, chop: $('#mdChop').checked, delta: $('#mdDelta').checked, minRR: +$('#mdRR').value, exit: $('#mdExit').value, align: $('#mdAlign').checked, confirm: $('#mdConfirm').checked, noPoc: $('#mdNoPoc').checked, bias: $('#mdBias').value || false, htf: $('#mdHtf').value, cont: $('#mdCont').checked, free: $('#mdFree').checked, tp2: $('#mdTp2').value, oneTry: $('#mdOneTry').checked, win: $('#mdWin').value, ob: $('#mdOb').value, obz: $('#mdObz').value, mtfLvl: $('#mdMtf').value, base: $('#mdBase').checked, vwz: $('#mdVwz').value };
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
