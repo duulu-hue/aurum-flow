@@ -331,6 +331,7 @@ tr.open td{background:var(--gold-soft)}
       <ul class="factors" id="factors"></ul>
       <div class="clsbox">
         <div class="clshead"><span>Settings for <b id="clsName">Metals</b></span><button type="button" class="linkbtn" id="clsReset">Reset to tested defaults</button></div>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ownChk" style="accent-color:var(--gold)"> <span id="ownLbl">Own settings for this market</span></label>
         <p class="hintp" id="clsMembers"></p>
         <p class="cls-status" id="clsStatus"></p>
         <p class="hintp">Each market type keeps its own settings. Click a market in the strip to change its type's settings.</p>
@@ -2375,7 +2376,13 @@ const AF = (() => {
     if (def.rng || def.group === 'Synthetics') return 'synthetics';
     return 'other';
   }
-  const ccfg = inst => cfg.classes[classOf(inst.def)];
+  // a market can carry its own copy of the settings; otherwise it uses its type's settings
+  cfg.own = cfg.own || {};
+  if (!cfg.ownV) {   // tested on 90 days: silver does best on v1 rules (no retest, no delta), gold on retest + delta
+    const c = JSON.parse(JSON.stringify(cfg.classes.metals)); c.model.confirm = false; c.model.delta = false;
+    cfg.own['BIN:XAGUSDT'] = c; cfg.ownV = 1; setTimeout(() => saveCfg());
+  }
+  const ccfg = inst => cfg.own[inst.def.id] || cfg.classes[classOf(inst.def)];
   const isWeekend = t => { const d = new Date(t), wd = d.getUTCDay(), h = d.getUTCHours(); return wd === 6 || (wd === 5 && h >= 22) || (wd === 0 && h < 22); };
   const brokerHours = inst => classOf(inst.def) === 'metals';
   const tradeable = (inst, t) => !brokerHours(inst) || !isWeekend(t);
@@ -3357,14 +3364,16 @@ const AF = (() => {
   };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
   function rebuildAll(onlyCls) { for (const i of insts) if (i.S && (!onlyCls || classOf(i.def) === onlyCls)) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
-  const curCls = () => classOf(cur.def), cc = () => cfg.classes[curCls()];
+  const curCls = () => classOf(cur.def), cc = () => ccfg(cur);
   function showStrategy() { const mdl = cc().strategy === 'frvp'; document.querySelectorAll('.valueOnly').forEach(x => x.hidden = mdl); document.querySelectorAll('.modelOnly').forEach(x => x.hidden = !mdl); }
   // fill the controls from the selected market's type
   function loadControls() {
     const c = cc(), k = curCls(), info = CLASS_INFO[k];
-    const members = insts.filter(i => cfg.enabled[i.def.id] && classOf(i.def) === k).map(i => i.def.label);
-    $('#clsName').textContent = info.name;
-    $('#clsMembers').textContent = members.length ? `Applies to ${members.join(', ')}.` : '';
+    const own = !!cfg.own[cur.def.id];
+    const members = insts.filter(i => cfg.enabled[i.def.id] && classOf(i.def) === k && !cfg.own[i.def.id]).map(i => i.def.label);
+    $('#clsName').textContent = own ? `${cur.def.label} only` : info.name;
+    $('#clsMembers').textContent = own ? `${cur.def.label} has its own settings. Other ${info.name.toLowerCase()} markets are not affected.` : members.length ? `Applies to ${members.join(', ')}.` : '';
+    $('#ownChk').checked = own; $('#ownLbl').textContent = `Own settings for ${cur.def.label}`;
     $('#clsStatus').textContent = info.status; $('#clsStatus').className = 'cls-status ' + (info.proven ? 'up' : 'warn');
     $('#stratSel').value = c.strategy; showStrategy();
     $('#mdDay').value = hhmm(c.model.dayStart); $('#mdSweep').checked = c.model.sweep; $('#mdChop').checked = c.model.chop; $('#mdDelta').checked = c.model.delta; $('#mdRR').value = String(c.model.minRR); $('#mdExit').value = c.model.exit || 'split'; $('#mdAlign').checked = !!c.model.align; $('#mdConfirm').checked = !!c.model.confirm; $('#mdNoPoc').checked = !!c.model.noPoc; $('#mdBias').value = biasKey(c.model.bias); $('#mdHtf').value = c.model.htf || ''; $('#mdCont').checked = !!c.model.cont; $('#mdFree').checked = !!c.model.free; $('#mdTp2').value = c.model.tp2 || 'far'; $('#mdOneTry').checked = !!c.model.oneTry; $('#mdWin').value = c.model.win || ''; $('#mdOb').value = c.model.ob || ''; $('#mdObz').value = c.model.obz || ''; $('#mdMtf').value = c.model.mtfLvl || ''; $('#mdBase').checked = !!c.model.base; $('#mdVwz').value = c.model.vwz || '';
@@ -3386,7 +3395,8 @@ const AF = (() => {
     save();
   };
   $('#tfSel').onchange = e => { cc().tf = +e.target.value; saveCfg(); $('#tfMsg').textContent = `Reloading ${CLASS_INFO[curCls()].name.toLowerCase()} on the new timeframe…`; setTimeout(() => location.reload(), 300); };
-  $('#clsReset').onclick = () => { cfg.classes[curCls()] = JSON.parse(JSON.stringify(CLASS_DEFAULTS[curCls()])); saveCfg(); setTimeout(() => location.reload(), 200); };
+  $('#clsReset').onclick = () => { if (cfg.own[cur.def.id]) delete cfg.own[cur.def.id]; else cfg.classes[curCls()] = JSON.parse(JSON.stringify(CLASS_DEFAULTS[curCls()])); saveCfg(); setTimeout(() => location.reload(), 200); };
+  $('#ownChk').onchange = () => { if ($('#ownChk').checked) cfg.own[cur.def.id] = JSON.parse(JSON.stringify(cfg.classes[curCls()])); else delete cfg.own[cur.def.id]; saveCfg(); setTimeout(() => location.reload(), 200); };
   const reEval = () => S && S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
