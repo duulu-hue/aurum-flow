@@ -3301,13 +3301,13 @@ const AF = (() => {
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
         if (!fx && res.length > 1) {
-          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t;
+          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.slice();
           for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
             for (let w = t0; w < t1; w += W) {
-              let pick = res[0], best = null;
+              let pick = playbook[0], best = null;
               if (w - t0 >= LB) {
-                for (const r of res) {
+                for (const r of playbook) {
                   const past = r[2].trades.filter(t => t.exitT != null && t.exitT < w && t.exitT >= w - LB);
                   if (past.length < 4) continue;
                   const sc = past.reduce((a, t) => a + t.net, 0);
