@@ -2319,7 +2319,7 @@ const AF = (() => {
         ${t.exp ? '<div class="cls-status warn" style="margin-bottom:8px"><b>EXPERIMENTAL · UNPROVEN</b>. Demo only. Not tested out of sample.</div>' : ''}<div class="sig-title">${esc(t.setup)} · ${e && e.model ? `quality ${t.score} (${t.score >= 80 ? 'A+' : t.score >= 65 ? 'A' : 'B'})` : `score ${t.score}`}</div>
         <div class="levels">
           <div class="lv"><span>Entry</span><b>${fmt(t.entry)}</b><small>${tfmt(t.t)}</small></div>
-          <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
+          <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / (t.pip || S.pip)) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
           <div class="lv"><span>TP1</span><b class="up">${fmt(t.tp1)}</b><small>${esc(t.tp1Name)} · ${t.rr1.toFixed(1)}R</small></div>
           <div class="lv"><span>TP2</span><b class="up">${fmt(t.tp2)}</b><small>${esc(t.tp2Name)} · ${t.rr2.toFixed(1)}R</small></div>
           ${(z => z ? `<div class="lv" style="grid-column:1/-1"><span>Position size</span><small class="${z.skip ? 'down' : ''}" style="font-size:13px">${esc(z.text.replace('Lot size: ', ''))}</small></div>` : '')(t.stage ? null : sizeFor({ label: cur.def.label, mk: cur.def.id, risk: t.risk, entry: t.entry }))}
@@ -2530,6 +2530,8 @@ const AF = (() => {
   const sgn = x => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(cur && cur.def.dec ? Math.min(cur.def.dec, 5) : 2)}`;
   const costPips = inst => cfg.costs[inst.def.id] ?? inst.def.cost;
   const unitWord = def => def.rng ? 'points' : 'pips';
+  // synthetic indices: 1 point = 1.00 of index price, the same as ask minus bid on MT5 (40428.93 to 40460.94 is 32.01 points)
+  const pipOf = inst => inst.def.rng ? 1 : (inst.S ? inst.S.pip : (inst.def.pip || 0.01));
 
   // ---------------- instruments
   const makeInst = def => ({
@@ -2560,7 +2562,7 @@ const AF = (() => {
   function addSignal(inst, tr) {
     const d = inst.def, S_ = inst.S;
     const t = {
-      id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
+      id: Date.now() + Math.random(), mk: d.id, label: d.label, pip: d.rng ? 1 : S_.pip, dec: S_.dec, t: tr.t, dir: tr.dir, setup: tr.setup, score: tr.score,
       entry: tr.entry, sl: tr.sl, sl0: tr.sl0, tp1: tr.tp1, tp2: tr.tp2, tp1Name: tr.tp1Name, tp2Name: tr.tp2Name, risk: tr.risk, rr1: tr.rr1, rr2: tr.rr2, exitMode: tr.exitMode || 'split',
       narrative: tr.narrative, stage: 0, realized: 0, status: 'Running', result: null, gross: null, pips: null, exitT: null, lastSeen: tr.t + tfOf(inst) * 60000, tf: tfOf(inst), maxMs: Math.max(20 * tfOf(inst) * 60000, (ccfg(inst).strategy === 'frvp' || ccfg(inst).strategy === 'fm' ? 24 : 4) * 3600e3),
       offset: cfg.offsets[d.id] || 0, cost: costPips(inst), broker: cfg.broker, exp: ccfg(inst).strategy === 'fm'
@@ -2973,7 +2975,7 @@ const AF = (() => {
     const heatBtn = document.querySelector('[data-layer="heat"]');
     layers.heat = inst.def.src === 'binance'; heatBtn.setAttribute('aria-pressed', layers.heat);
     $('#calLabel').textContent = `Your MT5 ${inst.def.label} price now`;
-    $('#costLabel').textContent = `Costs per trade for ${inst.def.label} (${unitWord(inst.def)})`;
+    $('#costLabel').textContent = inst.def.rng ? `Costs per trade for ${inst.def.label} (index points: ask minus bid)` : `Costs per trade for ${inst.def.label} (${unitWord(inst.def)})`;
     $('#cost').value = costPips(inst); showOff();
     $('#histTitle').textContent = inst.def.label;
     loadControls();
@@ -3039,7 +3041,7 @@ const AF = (() => {
   $('#hrsStart').onchange = $('#hrsEnd').onchange = () => { cfg.hoursStart = tmin($('#hrsStart').value); cfg.hoursEnd = tmin($('#hrsEnd').value); saveCfg(); rebuildAll(); };
   $('#cost').onchange = e => {
     const v = parseFloat(e.target.value); cfg.costs[cur.def.id] = isFinite(v) && v >= 0 ? v : cur.def.cost; e.target.value = cfg.costs[cur.def.id]; saveCfg();
-    if (cur.S) { cur.S.params.costPrice = costPips(cur) * cur.S.pip; panelDirty = true; }
+    if (cur.S) { cur.S.params.costPrice = costPips(cur) * pipOf(cur); panelDirty = true; }
   };
   $('#calib').onclick = () => {
     const v = parseFloat(String($('#mt5px').value).replace(',', '.'));
@@ -3518,7 +3520,7 @@ const AF = (() => {
     P.threshold = c.threshold; P.lookback = c.lookback; P.trigger = c.trigger; P.useHTF = c.useHTF; P.useRegime = c.useRegime;
     P.frvp = engineFrvp(); P.strategy = c.strategy; P.model = { ...c.model }; P.fm = c.fm ? { ...c.fm } : undefined;
     P.hours = (inst.def.rng || inst.def.group === 'Crypto') ? null : { start: cfg.hoursStart, end: cfg.hoursEnd };
-    P.costPrice = costPips(inst) * (inst.S ? inst.S.pip : (inst.def.pip || 0.01));
+    P.costPrice = costPips(inst) * pipOf(inst);
   };
   const keepLive = (N, old) => { N.liveFrom = old.liveFrom; N.cur = old.cur; N.liveBook = old.liveBook; clearHistoryActive(N); return N; };
   function rebuildAll(onlyCls) { for (const i of insts) if (i.S && (!onlyCls || classOf(i.def) === onlyCls)) { readParams(i.S.params, i); i.S = keepLive(AF.rebuild(i.S), i.S); syncEngine(i); } if (cur.S) S = cur.S; afterRebuild(); }
