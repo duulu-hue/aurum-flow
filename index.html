@@ -283,6 +283,15 @@ tr.open td{background:var(--gold-soft)}
       <div id="mkts" class="mkts"></div>
     </div>
     <div class="setcol">
+      <h3>Account &amp; risk</h3>
+      <div class="frow"><label for="accBal">Balance (USD)</label><input id="accBal" type="number" min="0" step="1" inputmode="decimal"></div>
+      <div class="frow"><label for="accRisk">Risk per trade (%)</label><input id="accRisk" type="number" min="0.1" max="10" step="0.1" inputmode="decimal"></div>
+      <div class="frow"><label for="accType">Account type</label><select id="accType"><option value="standard">Standard (0.01 lot gold = 1 oz)</option><option value="cent">Cent (100 times smaller)</option></select></div>
+      <div class="frow"><label for="accMinLot">Smallest lot</label><input id="accMinLot" type="number" min="0.01" step="0.01" inputmode="decimal"></div>
+      <p class="hintp" id="accMsg"></p>
+      <p class="hintp">Every signal then shows the lot size that keeps the loss at your risk %, or says to skip when even the smallest lot is too big. Uses 100 oz gold, 5,000 oz silver and 100,000-unit forex lots; check these match your broker.</p>
+    </div>
+    <div class="setcol">
       <h3>Telegram alerts</h3>
       <ol class="steps"><li>In Telegram, open <b>@BotFather</b>, send <span class="num">/newbot</span>, and copy the token it gives you.</li><li>Open your new bot and press <b>Start</b>.</li><li>Paste the token here and press <b>Find my chat ID</b>.</li></ol>
       <div class="frow"><label for="tgToken">Bot token</label><input id="tgToken" type="password" autocomplete="off"></div>
@@ -2210,6 +2219,7 @@ const AF = (() => {
           <div class="lv"><span>Stop</span><b class="down">${fmt(t.sl)}</b><small>${t.stage ? 'moved to breakeven' : Math.round(t.risk / S.pip) + (live && cur.def.rng ? ' points' : ' pips') + ' risk'}</small></div>
           <div class="lv"><span>TP1</span><b class="up">${fmt(t.tp1)}</b><small>${esc(t.tp1Name)} · ${t.rr1.toFixed(1)}R</small></div>
           <div class="lv"><span>TP2</span><b class="up">${fmt(t.tp2)}</b><small>${esc(t.tp2Name)} · ${t.rr2.toFixed(1)}R</small></div>
+          ${(z => z ? `<div class="lv" style="grid-column:1/-1"><span>Position size</span><small class="${z.skip ? 'down' : ''}" style="font-size:13px">${esc(z.text.replace('Lot size: ', ''))}</small></div>` : '')(t.stage ? null : sizeFor({ label: cur.def.label, mk: cur.def.id, risk: t.risk, entry: t.entry }))}
         </div>
         ${live && t.offset ? `<p class="mt5">On your ${esc(t.broker)} MT5 (offset ${sgn(t.offset)}): entry <b>${m5(t, t.entry)}</b> · stop <b>${m5(t, t.sl)}</b> · TP1 <b>${m5(t, t.tp1)}</b> · TP2 <b>${m5(t, t.tp2)}</b></p>` : ''}
         <p class="narr">${esc(t.narrative)}</p>
@@ -2480,12 +2490,26 @@ const AF = (() => {
     try { const r = await fetch(url, { method: 'POST', body }); return r.ok; }
     catch { try { await fetch(url, { method: 'POST', body, mode: 'no-cors' }); return true; } catch { return false; } }
   }
+  // position size for one signal from the account settings. Returns null when sizing is off or the market is not covered.
+  function sizeFor(t) {
+    const bal = +cfg.accBal, pct = +cfg.accRisk; if (!(bal > 0) || !(pct > 0)) return null;
+    const lab = t.label || '', cls = byId[t.mk] ? classOf(byId[t.mk].def) : '';
+    let per = null;   // account-currency risk of 1.00 standard lot for this stop
+    if (lab === 'XAUUSD') per = t.risk * 100; else if (lab === 'XAGUSD') per = t.risk * 5000;
+    else if (cls === 'forex' && /^[A-Z]{6}$/.test(lab)) { if (lab.slice(3) === 'USD') per = t.risk * 100000; else if (lab.slice(0, 3) === 'USD') per = t.risk * 100000 / t.entry; }
+    if (!(per > 0)) return { text: 'Lot size: not calculated for this market. Check the contract size with your broker.' };
+    const cent = cfg.accType === 'cent'; if (cent) per /= 100;
+    const min = +cfg.accMinLot > 0 ? +cfg.accMinLot : 0.01, want = bal * pct / 100, money = x => '$' + (x < 1 ? x.toFixed(2) : x < 100 ? x.toFixed(2) : Math.round(x));
+    const lots = Math.floor(want / per / min + 1e-9) * min;
+    if (lots < min - 1e-9) { const p = per * min / bal * 100; return { skip: true, text: `Lot size: SKIP. The smallest lot (${min}) would risk ${money(per * min)}, which is ${p >= 10 ? Math.round(p) : p.toFixed(1)}% of your ${money(bal)} account; your limit is ${pct}%.${cent ? '' : ' A cent account would allow this trade.'}` }; }
+    const r = per * lots; return { lots, text: `Lot size: ${lots.toFixed(2)}${cent ? ' (cent account)' : ''}. Risk ${money(r)}, which is ${(r / bal * 100).toFixed(1)}% of your ${money(bal)} account.` };
+  }
   function sigText(kind, t) {
     const f = x => x.toFixed(t.dec), side = t.dir > 0 ? 'BUY' : 'SELL', u = byId[t.mk] && byId[t.mk].def.rng ? 'points' : 'pips';
     if (kind === 'open') return `${side} ${t.label} · ${t.setup} · quality ${t.score}\n` +
       `Entry ${f(t.entry)} | SL ${f(t.sl0)} | TP1 ${f(t.tp1)} | TP2 ${f(t.tp2)}\n` +
       (t.offset ? `On ${t.broker} MT5 (offset ${t.offset >= 0 ? '+' : ''}${t.offset}): Entry ${m5(t, t.entry)} | SL ${m5(t, t.sl0)} | TP1 ${m5(t, t.tp1)} | TP2 ${m5(t, t.tp2)}\n` : '') +
-      `Risk ${Math.round(t.risk / t.pip)} ${u} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
+      `Risk ${Math.round(t.risk / t.pip)} ${u} · TP1 ${t.rr1.toFixed(1)}R · TP2 ${t.rr2.toFixed(1)}R\n` + (sizeFor(t) ? sizeFor(t).text + '\n' : '') + `\n${t.narrative}\n\nAurum Flow forward test. Not financial advice.`;
     if (kind === 'tp1') return `TP1 hit: ${side} ${t.label} from ${f(t.entry)}. Half banked, stop moved to breakeven.`;
     return `${t.status}: ${side} ${t.label} from ${f(t.entry)}. ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R, ${Math.round(t.pips)} ${u} after costs.`;
   }
@@ -2921,6 +2945,14 @@ const AF = (() => {
   $('#tgToken').onchange = e => { cfg.tgToken = e.target.value.trim(); saveCfg(); };
   $('#tgChat').onchange = e => { cfg.tgChat = e.target.value.trim(); saveCfg(); };
   $('#tgOn').onchange = e => { cfg.tgOn = e.target.checked; saveCfg(); };
+  $('#accBal').value = cfg.accBal || ''; $('#accRisk').value = cfg.accRisk || 1; $('#accType').value = cfg.accType || 'standard'; $('#accMinLot').value = cfg.accMinLot || 0.01;
+  const accShow = () => {
+    const bal = +cfg.accBal; if (!(bal > 0)) { $('#accMsg').textContent = 'Enter your balance to get a lot size on every signal. Stored in this browser only.'; return; }
+    const ex = (label, risk, entry) => { const z = sizeFor({ label, risk, entry, mk: (insts.find(i => i.def.label === label) || { def: {} }).def.id }); return z ? `${label} with a ${label === 'XAUUSD' ? '$8.00' : '$0.24'} stop: ${z.text.replace('Lot size: ', '')}` : ''; };
+    $('#accMsg').textContent = `Examples. ${ex('XAUUSD', 8, 4000)} ${ex('XAGUSD', 0.24, 52)}`;
+  };
+  $('#accBal').oninput = $('#accRisk').oninput = $('#accType').onchange = $('#accMinLot').oninput = () => { cfg.accBal = +$('#accBal').value || 0; cfg.accRisk = +$('#accRisk').value || 0; cfg.accType = $('#accType').value; cfg.accMinLot = +$('#accMinLot').value || 0.01; saveCfg(); accShow(); panelDirty = true; };
+  accShow();
   $('#tgFind').onclick = async () => {
     cfg.tgToken = $('#tgToken').value.trim(); saveCfg();
     if (!cfg.tgToken) { $('#tgMsg').textContent = 'Paste the bot token first.'; return; }
