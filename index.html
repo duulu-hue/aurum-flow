@@ -801,6 +801,7 @@ const AF = (() => {
   // ---------------------------------------------------------------- confluence evaluation
   function evaluate(S, k) {
     if (S.params && S.params.strategy === 'frvp') return modelEval(S, k);
+    if (S.params && S.params.strategy === 'fm') return fmEval(S, k);
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN);
     const prof = engineProfile(S, k);
     const vw = S.vwap[k], sd = S.vsd[k];
@@ -1294,6 +1295,106 @@ const AF = (() => {
     return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, pdh, pdl, model: true, s15, s60, s240, verdict, tdText, c4, c4Text };
   }
 
+  // ---------------------------------------------------------------- fractal model (C2 sweep + CISD), price only
+  // Port of the user's "FM Base IC-CISD" indicator. Higher-timeframe candle 2 takes candle 1's low (high) and closes
+  // back inside; on the entry timeframe the CISD level is the open of the run that made that low (high). The setup is
+  // live through candles 3 and 4 and dies if price trades beyond candle 2's extreme. Targets are the indicator's
+  // projections: the CISD-to-extreme range measured from the CISD level (-1, -2, -2.5).
+  const FM_DEFAULTS = { htf: 0, tspot: false, tp2: 2, bias: false, c3only: false, maxLate: 0.5 };
+  function fmState(S, k) {
+    const o = Object.assign({}, FM_DEFAULTS, S.params.fm || {});
+    const hm = o.htf || (S.interval <= 5 * 60000 ? 60 : 240), ms = hm * 60000, off = hm >= 240 ? 22 * 3600e3 : 0;
+    let c = S._fm;
+    if (!c || c.upto > k || c.hm !== hm) c = S._fm = { upto: -1, hm, cur: null, prev: null, lvl: { 1: null, '-1': null }, set: { 1: null, '-1': null }, sig: { 1: null, '-1': null } };
+    const B = S.bars, up_ = j => B[j].c > B[j].o, dw_ = j => B[j].c < B[j].o, eq_ = j => B[j].c === B[j].o;
+    for (let j = c.upto + 1; j <= k; j++) {
+      const b = B[j], key = Math.floor((b.t - off) / ms), changed = !c.cur || c.cur.key !== key;
+      c.sig[1] = c.sig[-1] = null;
+      const lvlPrev = { 1: c.lvl[1] && { ...c.lvl[1] }, '-1': c.lvl[-1] && { ...c.lvl[-1] } };
+      if (changed) {
+        const P = c.cur, Q = c.prev;
+        if (P && Q) for (const d of [1, -1]) {
+          const bull = d > 0, trig = bull ? P.l < Q.l && P.c > Q.l : P.h > Q.h && P.c < Q.h, st = c.set[d];
+          if (trig) {
+            const L = lvlPrev[d];
+            c.set[d] = L && L.px != null ? { d, ext: bull ? P.l : P.h, c1: bull ? Q.l : Q.h, mid: (P.h + P.l) / 2, lvl: L.px, conf: !!L.rec, phase: 1, born: j, fired: false, dead: false, early: !!L.rec } : null;
+          } else if (st && !st.dead) { if (st.phase === 1) st.phase = 2; else c.set[d] = null; }
+        }
+        c.prev = P; c.cur = { key, o: b.o, h: b.h, l: b.l, c: b.c };
+      } else { const u = c.cur; if (b.h > u.h) u.h = b.h; if (b.l < u.l) u.l = b.l; u.c = b.c; }
+      // CISD level on the entry timeframe, as the indicator finds it
+      const cu = c.cur, pv = c.prev;
+      if (pv && j >= 11) for (const d of [1, -1]) {
+        const bull = d > 0, atExt = bull ? b.l === cu.l && b.l < pv.l : b.h === cu.h && b.h > pv.h; if (!atExt) continue;
+        const W = bull ? dw_ : up_, A = bull ? up_ : dw_;       // W: candles with the run into the extreme, A: against it
+        let px = null;
+        if ((W(j) || eq_(j)) && (A(j - 1) || eq_(j - 1)) && !(eq_(j) && eq_(j - 1))) px = b.o;
+        else for (let i = 2; i <= 10; i++) {
+          if (bull ? B[j - i].l < b.l : B[j - i].h > b.h) break;
+          if ((A(j - i) || eq_(j - i)) && W(j - i + 1)) {
+            px = B[j - i + 1].o;
+            for (let q = i - 1; q >= 0; q--) if (W(j - q) && (bull ? B[j - q].o > px : B[j - q].o < px)) px = B[j - q].o;
+            if (bull ? px < b.o : px > b.o) px = (bull ? b.c > b.o : b.c < b.o) ? (bull ? b.h : b.l) : b.o;
+            break;
+          }
+        }
+        if (px != null) c.lvl[d] = { px, at: j, rec: false };
+      }
+      for (const d of [1, -1]) { const L = c.lvl[d]; if (L && !L.rec && (d > 0 ? b.c > L.px : b.c < L.px)) L.rec = true; }
+      // setup life and the entry signal
+      for (const d of [1, -1]) {
+        const st = c.set[d]; if (!st || st.dead) continue;
+        if (d > 0 ? b.l < st.ext : b.h > st.ext) { st.dead = true; continue; }
+        if (!st.conf && (d > 0 ? b.c > st.lvl : b.c < st.lvl)) st.conf = true;
+        if (st.conf && !st.fired) { st.fired = true; c.sig[d] = st; }
+      }
+    }
+    c.upto = Math.max(c.upto, k);
+    return { c, o, hm };
+  }
+  function fmEval(S, k) {
+    const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), prof = engineProfile(S, k), vw = S.vwap[k], sd = S.vsd[k];
+    const { c, o, hm } = fmState(S, k), f = x => x.toFixed(S.dec), hl = hm >= 60 ? hm / 60 + 'H' : hm + 'm';
+    const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs), fresh = S._fmk !== k; S._fmk = k;
+    const s240 = o.bias ? mtfTrend(S, k, hm >= 240 ? 1440 : 240) : 'none';
+    const cost = S.params.costPrice || 0;
+    const side = d => {
+      const up = d > 0, fac = (key, label, max) => ({ key, label, max, pts: 0, detail: '' });
+      const swf = fac('liq', `${hl} candle 2 sweep`, 30), cf = fac('cisd', `${S.tfLabel} CISD`, 30), tf = fac('zone', 'T-spot', 15), bf = fac('align', 'Higher-timeframe bias', 10), rf = fac('room', 'Room to target', 15);
+      const st = c.set[d], sig = c.sig[d]; let fire = false, why = null, lv = null;
+      if (!st || st.dead) { swf.detail = `No ${up ? 'bullish' : 'bearish'} setup: waiting for a ${hl} candle to take the previous ${hl} ${up ? 'low' : 'high'} and close back ${up ? 'above' : 'below'} it.`; why = swf.detail; }
+      else {
+        swf.pts = 30; swf.detail = `${hl} candle 2 took candle 1's ${up ? 'low' : 'high'} at ${f(st.c1)} (extreme ${f(st.ext)}) and closed back inside. Now in candle ${st.phase + 2}.`;
+        if (st.conf) { cf.pts = 30; cf.detail = `${up ? 'Bullish' : 'Bearish'} CISD: closed ${up ? 'above' : 'below'} ${f(st.lvl)}.`; } else { cf.detail = `Waiting for a ${S.tfLabel} close ${up ? 'above' : 'below'} the CISD level ${f(st.lvl)}.`; why = cf.detail; }
+        const inT = up ? b.c <= st.mid : b.c >= st.mid;
+        if (inT) { tf.pts = 15; tf.detail = `Entry is on the right side of candle 2's midpoint ${f(st.mid)}.`; } else { tf.na = !o.tspot; tf.detail = `Price is beyond candle 2's midpoint ${f(st.mid)}.`; }
+        const want = up ? 'up' : 'down'; if (!o.bias) { bf.na = true; bf.detail = 'Not required.'; } else if (s240 === want) { bf.pts = 10; bf.detail = `Higher-timeframe structure is ${want}.`; } else bf.detail = `Higher-timeframe structure is not ${want}.`;
+        if (sig) {
+          const range = Math.abs(st.lvl - st.ext), ref = b.c;
+          let sl = st.ext - d * Math.max(2 * S.pip, 0.05 * range), risk = d * (ref - sl);
+          const minRisk = Math.max(0.5 * atr, 8 * cost); if (risk < minRisk) { sl = ref - d * minRisk; risk = minRisk; }
+          const t1 = st.lvl + d * range, t2 = st.lvl + d * o.tp2 * range, rr1 = d * (t1 - ref) / risk, rr2 = d * (t2 - ref) / risk;
+          const late = d * (ref - st.lvl) / Math.max(range, 1e-12);
+          if (!inHours) why = null;
+          else if (o.c3only && st.phase !== 1) why = 'CISD confirmed only in candle 4; this version trades candle 3 only.';
+          else if (o.tspot && !inT) why = tf.detail + ' No entry outside the T-spot side.';
+          else if (o.bias && s240 !== want) why = bf.detail;
+          else if (late > o.maxLate) why = `CISD confirmed, but price is already ${late.toFixed(1)} ranges past the level. Too late to chase.`;
+          else if (rr1 < 0.6) why = `CISD confirmed, but the first target is only ${rr1.toFixed(1)}R away.`;
+          else { fire = true; rf.pts = 15; rf.detail = `TP1 projection -1 at ${f(t1)} (${rr1.toFixed(1)}R), TP2 projection -${o.tp2} at ${f(t2)} (${rr2.toFixed(1)}R).`; lv = { ref, sl, risk, t1, t2, rr1, rr2 }; }
+        } else if (st.conf && !why) why = st.fired ? 'This setup already gave its entry.' : null;
+      }
+      const factors = [swf, cf, tf, bf, rf], q = Math.min(95, 50 + (st && st.phase === 1 ? 10 : 0) + (tf.pts ? 15 : 0) + (bf.pts ? 10 : 0) + (st && !st.early ? 10 : 0));
+      const tags = st ? { setup: 'fractal model', entry: st.early ? 'CISD inside candle 2' : `CISD in candle ${st.phase + 2}`, zone: tf.pts ? 'T-spot side' : 'beyond midpoint', side: up ? 'long' : 'short', liq: `${hl} candle 1`, h1: '–', m15: '–', day: '–', stacked: false, rr1: lv && lv.rr1 >= 1 ? '1R or more' : 'under 1R', delta: null } : null;
+      const L = lv || { ref: b.c, sl: b.c - d * atr, risk: atr, t1: b.c + d * atr, t2: b.c + d * 2 * atr, rr1: 1, rr2: 2 };
+      return { tags, dir: d, factors, score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: L.ref, sl: L.sl, risk: L.risk, tp1: L.t1, tp1Name: 'projection -1', tp2: L.t2, tp2Name: `projection -${o.tp2}`, rr1: L.rr1, rr2: L.rr2,
+        setup: `Fractal model ${hl} ${up ? 'long' : 'short'}`, hasTrigger: !!(st && st.conf), hasLocation: !!(st && !st.dead), blocked: false, offHours: !inHours, why, plan: `${hl} candle 2 sweep, then a ${S.tfLabel} CISD. Stop beyond candle 2's extreme.`, swept: !!(st && !st.dead) };
+    };
+    const long = side(1), short = side(-1);
+    let pick = null; for (const x of [long, short]) if (x.fire && (!pick || x.score > pick.score)) pick = x;
+    return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, fm: true };
+  }
+
   function sideEval(ctx, d) {
     const { S, k, b, atr, prof, vw, sd, sdOk, rg } = ctx;
     const f = x => x.toFixed(S.dec);
@@ -1530,7 +1631,7 @@ const AF = (() => {
       if (stopHit) return finish(S, t, k, t.realized, 'TP1, rest at breakeven', t.entry);
       if (hit(t.tp2)) return finish(S, t, k, t.realized + 0.5 * R(t.tp2), 'TP2 hit', t.tp2);
     }
-    if (k - t.k >= Math.max(20, Math.round((S.params.strategy === 'frvp' ? 24 : 4) * 3600e3 / S.interval))) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
+    if (k - t.k >= Math.max(20, Math.round((S.params.strategy === 'frvp' || S.params.strategy === 'fm' ? 24 : 4) * 3600e3 / S.interval))) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
   }
 
   function liveR(S, price) {
@@ -3240,6 +3341,7 @@ const AF = (() => {
     const g = histCtx.grid.find(x => x[0] === $('#histPick').value) || histCtx.grid[0];
     const [, tf, mo] = g, t0 = new Date(v).getTime(), a = t0 - 30 * 60000, z = t0 + 90 * 60000;
     const inst = histCtx.inst, bars = aggregate(histCtx.m1, tf), params = { ...histCtx.base, model: { ...histCtx.base.model, exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo } };
+    if (mo.fm) { params.strategy = 'fm'; params.fm = mo.fm; }
     out.innerHTML = '<p class="hintp">Replaying…</p>'; await new Promise(r => setTimeout(r));
     const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S ? inst.S.BIN : inst.def.bin, pip: inst.S ? inst.S.pip : inst.def.pip, dec: inst.S ? inst.S.dec : inst.def.dec, interval: tf * 60000, htfMult: HTF_MULT[tf] });
     Object.assign(T.params, params);
@@ -3328,12 +3430,18 @@ const AF = (() => {
       if (base.strategy === 'frvp') {
         const grid = [];
         const fx = classOf(inst.def) === 'forex';
-        if (fx) for (const tf of [15, 5]) {
-          const o = { sweep: true, delta: false, align: false, confirm: false, noPoc: false, bias: false };
-          grid.push([`${tf}m · v1 current rules`, tf, { ...o }]);
-          grid.push([`${tf}m · + top-down 4H & 1H`, tf, { ...o, bias: 'both' }]);
-          grid.push([`${tf}m · + top-down 4H only`, tf, { ...o, bias: 'h4' }]);
-          grid.push([`${tf}m · 4H only + no POC + retest`, tf, { ...o, noPoc: true, bias: 'h4', confirm: true }]);
+        const fmk = fx || classOf(inst.def) === 'crypto';
+        if (fmk) {
+          // forex and crypto: the fractal model (price only, needs no volume), against the current FRVP rules
+          grid.push([`5m · current FRVP rules`, 5, { sweep: true, delta: false, align: false, confirm: false }]);
+          for (const tf of [5, 15]) {
+            const h = tf === 5 ? '1H' : '4H';
+            grid.push([`${tf}m–${h} fractal model · entry on CISD`, tf, { fm: {} }]);
+            grid.push([`${tf}m–${h} fractal model · candle 3 only`, tf, { fm: { c3only: true } }]);
+            grid.push([`${tf}m–${h} fractal model · T-spot side only`, tf, { fm: { tspot: true } }]);
+            grid.push([`${tf}m–${h} fractal model · with higher-timeframe structure`, tf, { fm: { bias: true } }]);
+            grid.push([`${tf}m–${h} fractal model · TP2 at projection -2.5`, tf, { fm: { tp2: 2.5 } }]);
+          }
         }
         else for (const tf of [15, 5]) {
           if (tf !== 5) continue;
@@ -3347,7 +3455,7 @@ const AF = (() => {
           grid.push([`5m · TP1 to TP5, stop trails one level behind`, tf, { ...o, exit: 'trail' }]);
         }
         histCtx = { inst, m1, base, grid };
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
         if (false && !fx && res.length > 1) {
