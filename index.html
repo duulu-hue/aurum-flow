@@ -432,9 +432,14 @@ tr.open td{background:var(--gold-soft)}
   </div>
   <div class="pane" id="pane-hist" hidden>
     <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, rebuilt into 1, 3, 5 and 15-minute entries, each with the day-type filter on and off, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
-    <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
+    <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="p90">Previous 90 days (days 91–180 back, never used for tuning)</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
+    <div id="histPath" hidden>
+      <h3 class="tl-h">Trade path</h3>
+      <p class="hintp" id="histPathMsg"></p>
+      <div class="tablewrap"><table><thead><tr><th>Group</th><th class="num">Trades</th><th class="num">Best move by 15 min</th><th class="num">by 30 min</th><th class="num">by 60 min</th><th class="num">Reached +0.3R by 30 min</th><th class="num">Reached +0.5R by 60 min</th><th class="num">Worst dip by 30 min</th></tr></thead><tbody id="histPathBody"></tbody></table></div>
+    </div>
     <div id="histPips" hidden>
       <h3 class="tl-h">Pips view</h3>
       <p class="hintp">Net pips are after costs. "Reached" counts stopped-out trades where price first ran at least this many pips your way before the stop. "Ran after" counts stopped-out trades that never got there but did within 24 hours after the stop. Measured on one-minute candles.</p>
@@ -731,7 +736,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', fail: '' };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -1682,6 +1687,13 @@ const AF = (() => {
       if (t.li >= n) return finish(S, t, k, t.realized, `All ${n} targets hit`, t.L[n - 1]);
       if (k - t.k >= Math.max(20, Math.round(24 * 3600e3 / S.interval))) finish(S, t, k, t.realized + (n - t.li) * part * R(b.c), 'Timed out', b.c);
       return;
+    }
+    const fl = S.params && S.params.strategy === 'frvp' && S.params.model && S.params.model.fail;
+    if (fl && t.stage === 0) {
+      // no follow-through: if the best move in our favour is still under X R after N bars, leave at the close of that bar
+      const [fn, fx] = String(fl).split(':').map(Number), fav = d > 0 ? b.h - t.entry : t.entry - b.l;
+      t.mfe = Math.max(t.mfe || 0, fav / t.risk);
+      if (!stopHit && k - t.k >= fn && t.mfe < fx) return finish(S, t, k, Math.max(-1, R(b.c)), 'No follow-through', b.c);
     }
     if (t.stage === 0) {
       if (stopHit) return finish(S, t, k, -1, 'Stopped out', t.sl);
@@ -3480,6 +3492,19 @@ const AF = (() => {
     });
     $('#histPipsBody').innerHTML = rows.join(''); box.hidden = false;
   }
+  // trade path: how far price went our way in the first 15, 30 and 60 minutes after the signal, for winners and for losers
+  function renderPath() {
+    const box = $('#histPath'); if (!box) return; if (!histCtx || !histRes.length) { box.hidden = true; return; }
+    const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0], list = pick[2].trades || [], m1 = histCtx.m1;
+    const at = ms => { let lo = 0, hi = m1.length; while (lo < hi) { const m = (lo + hi) >> 1; if (m1[m].t < ms) lo = m + 1; else hi = m; } return lo; };
+    const path = t => { const o = {}; for (const w of [15, 30, 60]) { let mf = 0, ma = 0; for (let i = at(t.t); i < m1.length && m1[i].t < t.t + w * 60000; i++) { const f = t.dir > 0 ? m1[i].h - t.entry : t.entry - m1[i].l, a = t.dir > 0 ? t.entry - m1[i].l : m1[i].h - t.entry; if (f > mf) mf = f; if (a > ma) ma = a; } o['f' + w] = mf / t.risk; o['a' + w] = ma / t.risk; } return o; };
+    const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const g = { 'Winners': list.filter(t => t.net > 0.05), 'Losers': list.filter(t => t.net < -0.05) };
+    const f2 = x => x === null ? '–' : x.toFixed(2) + 'R', pc = (a, k, th) => a.length ? Math.round(a.filter(x => x[k] >= th).length / a.length * 100) + '%' : '–';
+    $('#histPathBody').innerHTML = Object.entries(g).map(([nm, L]) => { const P = L.map(path); return `<tr><td>${nm}</td><td class="num">${L.length}</td><td class="num">${f2(med(P.map(p => p.f15)))}</td><td class="num">${f2(med(P.map(p => p.f30)))}</td><td class="num">${f2(med(P.map(p => p.f60)))}</td><td class="num">${pc(P, 'f30', 0.3)}</td><td class="num">${pc(P, 'f60', 0.5)}</td><td class="num">${f2(med(P.map(p => p.a30)))}</td></tr>`; }).join('');
+    $('#histPathMsg').textContent = pick[0] + ' on ' + histMarket + ': the middle trade of each group. A rule that leaves trades with no follow-through only helps if losers stall early (low best-move numbers) and winners do not (high ones).';
+    box.hidden = false;
+  }
   const biasKey = x => x === 'h4' ? 'h4' : x ? 'both' : '';
   // which conditions separate winners from losers in this version
   function renderBreakdown(list) {
@@ -3501,7 +3526,7 @@ const AF = (() => {
     }
     $('#histBreak').innerHTML = `<h3 class="tl-h">What separates winners from losers</h3><p class="hintp" style="margin-bottom:8px">Each condition at the moment of the signal, with the win rate and average result of the trades that had it. Groups under 15 trades are too small to trust.</p><div class="tablewrap"><table class="bk"><thead><tr><th>Condition</th><th>Value</th><th class="num">Trades</th><th class="num">Won</th><th class="num">Avg per trade</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
   }
-  $('#pipThr').oninput = renderPips; $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
+  $('#pipThr').oninput = renderPips; $('#histPick').onchange = $('#histShow').onchange = () => { renderHistTrades(); renderPath(); };
   $('#histCsv').onclick = () => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
     const head = 'number,local_time,utc_time,side,entry,stop,tp1,tp1_level,tp2,tp2_level,result_R_after_costs,quality,outcome,zone,liquidity,your_verdict,your_reason\n';
@@ -3512,9 +3537,10 @@ const AF = (() => {
   let histBusy = false;
   $('#histRun').onclick = async () => {
     if (histBusy || !live || !cur.S) return; histBusy = true; $('#histRun').disabled = true;
-    const inst = cur, say = m => { $('#histMsg').textContent = m; }, days = +$('#histDays').value;
+    const inst = cur, say = m => { $('#histMsg').textContent = m; }, pv = $('#histDays').value === 'p90', days = pv ? 90 : +$('#histDays').value;
     try {
-      const m1 = (await historyBars(inst, days, say)).filter(b => tradeable(inst, b.t));
+      let m1 = (await historyBars(inst, pv ? 180 : days, say)).filter(b => tradeable(inst, b.t));
+      if (pv) { const cut = Date.now() + inst.clockOff - 90 * 86400e3; m1 = m1.filter(b => b.t < cut); }
       if (m1.length < 500) throw new Error('not enough history came back');
       const base = { ...inst.S.params }; readParams(base, inst); const ownFm = base.strategy === 'fm'; if (ownFm) base.strategy = 'frvp';
       const res = [], splitT = m1[0].t + (m1[m1.length - 1].t - m1[0].t) * 2 / 3;
@@ -3538,17 +3564,15 @@ const AF = (() => {
           // exit test: the entry rules are this market's own settings; only the way profit is taken changes
           const o = { ...base.model, exit: 'split', tp2: 'far' };
           grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
-          grid.push([`5m · half at TP1, rest to the nearest level 2.5R+ away`, tf, { ...o, tp2: 'near' }]);
-          grid.push([`5m · all out at TP1 (nearest liquidity)`, tf, { ...o, exit: 'tp1' }]);
-          grid.push([`5m · TP1 to TP3: a third at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder3' }]);
-          grid.push([`5m · TP1 to TP5: equal parts at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder' }]);
-          grid.push([`5m · TP1 to TP5, stop trails one level behind`, tf, { ...o, exit: 'trail' }]);
+          grid.push([`5m · leave if under +0.2R after 3 bars (15 min)`, tf, { ...o, fail: '3:0.2' }]);
+          grid.push([`5m · leave if under +0.3R after 6 bars (30 min)`, tf, { ...o, fail: '6:0.3' }]);
+          grid.push([`5m · leave if under +0.5R after 12 bars (60 min)`, tf, { ...o, fail: '12:0.5' }]);
         }
         histCtx = { inst, m1, base, grid };
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
-        if (classOf(inst.def) !== 'forex' && !ownFm && res.length > 1) {
+        if (false && classOf(inst.def) !== 'forex' && !ownFm && res.length > 1) {
           const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.filter(r => !r[1].bkd && !r[1].auto);
           for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
@@ -3588,7 +3612,7 @@ const AF = (() => {
       $('#histTable').hidden = false;
       histRes = res; histMarket = inst.def.label;
       $('#histPick').innerHTML = res.map(r => `<option${r === mine ? ' selected' : ''}>${esc(r[0])}</option>`).join('');
-      renderHistTrades(); renderPips();
+      renderHistTrades(); renderPips(); renderPath();
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
       say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile from ${hhmm(base.model.dayStart)} UTC, CISD trigger, minimum ${base.model.minRR}R to TP2${brokerHours(inst) ? ', broker weekend skipped' : ''}).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
