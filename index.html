@@ -435,6 +435,12 @@ tr.open td{background:var(--gold-soft)}
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
+    <div id="histPips" hidden>
+      <h3 class="tl-h">Pips view</h3>
+      <p class="hintp">Net pips are after costs. "Reached" counts stopped-out trades where price first ran at least this many pips your way before the stop. "Ran after" counts stopped-out trades that never got there but did within 24 hours after the stop. Measured on one-minute candles.</p>
+      <div class="frow" style="margin-bottom:8px"><label style="display:flex;align-items:center;gap:8px">Pips to reach <input type="number" id="pipThr" value="200" min="1" step="10" style="width:90px"></label></div>
+      <div class="tablewrap"><table><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Net pips</th><th class="num">Pips per day</th><th class="num">Stopped out</th><th class="num">Reached before stop</th><th class="num">Ran after stop</th><th class="num">Avg best move before stop</th></tr></thead><tbody id="histPipsBody"></tbody></table></div>
+    </div>
     <div id="histTrades" hidden>
       <h3 class="tl-h">Trades to review</h3>
       <div class="frow" style="margin-bottom:8px">
@@ -3455,6 +3461,25 @@ const AF = (() => {
     renderBreakdown(list);
     $('#histTrades').hidden = false;
   }
+  // pips view: how many pips each version earned per day, and how far price ran in the trade's direction before a stop-out
+  // (and in the 24 hours after it), measured on the one-minute candles
+  function renderPips() {
+    const box = $('#histPips'); if (!box) return; if (!histCtx || !histRes.length) { box.hidden = true; return; }
+    const m1 = histCtx.m1, thr = Math.max(1, +$('#pipThr').value || 200), days = Math.max(1, (m1[m1.length - 1].t - m1[0].t) / 86400e3);
+    const at = ms => { let lo = 0, hi = m1.length; while (lo < hi) { const m = (lo + hi) >> 1; if (m1[m].t < ms) lo = m + 1; else hi = m; } return lo; };
+    const best = (t, from, to) => { let mx = 0; for (let i = at(from); i < m1.length && m1[i].t < to; i++) { const x = t.dir > 0 ? m1[i].h - t.entry : t.entry - m1[i].l; if (x > mx) mx = x; } return mx / t.pip; };
+    const rows = histRes.map(([name, v, s]) => {
+      const L = s.trades || []; let net = 0, stops = 0, before = 0, after = 0, sum = 0;
+      for (const t of L) {
+        net += t.net * t.risk / t.pip;
+        if (t.status !== 'Stopped out' || t.exitT == null) continue;
+        stops++; const b = best(t, t.t, t.exitT); sum += b; if (b >= thr) before++;
+        if (b < thr && best(t, t.exitT, t.exitT + 24 * 3600e3) >= thr) after++;
+      }
+      return `<tr><td>${esc(name)}</td><td class="num">${L.length}</td><td class="num ${net >= 0 ? 'up' : 'down'}">${net >= 0 ? '+' : ''}${Math.round(net).toLocaleString()}</td><td class="num ${net >= 0 ? 'up' : 'down'}">${net >= 0 ? '+' : ''}${(net / days).toFixed(1)}</td><td class="num">${stops}</td><td class="num">${before}${stops ? ` <span class="muted">(${Math.round(before / stops * 100)}%)</span>` : ''}</td><td class="num">${after}</td><td class="num">${stops ? Math.round(sum / stops) : '–'}</td></tr>`;
+    });
+    $('#histPipsBody').innerHTML = rows.join(''); box.hidden = false;
+  }
   const biasKey = x => x === 'h4' ? 'h4' : x ? 'both' : '';
   // which conditions separate winners from losers in this version
   function renderBreakdown(list) {
@@ -3476,7 +3501,7 @@ const AF = (() => {
     }
     $('#histBreak').innerHTML = `<h3 class="tl-h">What separates winners from losers</h3><p class="hintp" style="margin-bottom:8px">Each condition at the moment of the signal, with the win rate and average result of the trades that had it. Groups under 15 trades are too small to trust.</p><div class="tablewrap"><table class="bk"><thead><tr><th>Condition</th><th>Value</th><th class="num">Trades</th><th class="num">Won</th><th class="num">Avg per trade</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
   }
-  $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
+  $('#pipThr').oninput = renderPips; $('#histPick').onchange = $('#histShow').onchange = () => renderHistTrades();
   $('#histCsv').onclick = () => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
     const head = 'number,local_time,utc_time,side,entry,stop,tp1,tp1_level,tp2,tp2_level,result_R_after_costs,quality,outcome,zone,liquidity,your_verdict,your_reason\n';
@@ -3513,15 +3538,18 @@ const AF = (() => {
           // exit test: the entry rules are this market's own settings; only the way profit is taken changes
           const o = { ...base.model, exit: 'split', tp2: 'far' };
           grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
-          grid.push([`5m · + breakdown retest, tight (within 0.2 hourly ATR of the value edge)`, tf, { ...o, bkd: 'tight' }]);
-          grid.push([`5m · + breakdown retest, wide (within 0.5 hourly ATR of the value edge)`, tf, { ...o, bkd: 'wide' }]);
+          grid.push([`5m · half at TP1, rest to the nearest level 2.5R+ away`, tf, { ...o, tp2: 'near' }]);
+          grid.push([`5m · all out at TP1 (nearest liquidity)`, tf, { ...o, exit: 'tp1' }]);
+          grid.push([`5m · TP1 to TP3: a third at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder3' }]);
+          grid.push([`5m · TP1 to TP5: equal parts at each level, stop to breakeven after TP1`, tf, { ...o, exit: 'ladder' }]);
+          grid.push([`5m · TP1 to TP5, stop trails one level behind`, tf, { ...o, exit: 'trail' }]);
         }
         histCtx = { inst, m1, base, grid };
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
-        if (false && !fx && res.length > 1) {
-          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.slice();
+        if (classOf(inst.def) !== 'forex' && !ownFm && res.length > 1) {
+          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.filter(r => !r[1].bkd && !r[1].auto);
           for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
             for (let w = t0; w < t1; w += W) {
@@ -3539,7 +3567,7 @@ const AF = (() => {
               if (pick) for (const t of pick[2].trades) if (t.t >= w && t.t < w + W) list.push({ ...t, setup: `${t.setup} (auto: ${nm})` });
             }
             const s = summarize(list.map(t => ({ t: t.t, dir: t.dir, net: t.net })), days, splitT); s.trades = list;
-            const name = `5m · AUTO: best of last ${lbDays} days, chosen weekly${aside ? ', stands aside if none made money' : ''}`;
+            const name = `5m · AUTO (test): best exit of the last ${lbDays} days, chosen weekly${aside ? ', stands aside if none made money' : ''}`;
             s.autoUsed = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v} wk`).join(', ');
             res.push([name, { tf: 5, auto: true }, s]);
           }
@@ -3560,7 +3588,7 @@ const AF = (() => {
       $('#histTable').hidden = false;
       histRes = res; histMarket = inst.def.label;
       $('#histPick').innerHTML = res.map(r => `<option${r === mine ? ' selected' : ''}>${esc(r[0])}</option>`).join('');
-      renderHistTrades();
+      renderHistTrades(); renderPips();
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
       say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile from ${hhmm(base.model.dayStart)} UTC, CISD trigger, minimum ${base.model.minRR}R to TP2${brokerHours(inst) ? ', broker weekend skipped' : ''}).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
