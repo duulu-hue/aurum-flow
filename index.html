@@ -736,7 +736,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', fail: '' };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', fail: '', nocisd: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -1034,7 +1034,8 @@ const AF = (() => {
       if (!swept && m.htf === 'only' && c4dir === d) swept = { lvl: up ? c4.c1.l : c4.c1.h, name: `4H candle 1 ${up ? 'low' : 'high'} (taken by candle 2)` };
       if (swept) { lf.pts = 20; lf.detail = `${up ? 'Sell' : 'Buy'}-side liquidity taken: price ran the ${swept.name} at ${f(swept.lvl)} and came back ${up ? 'above' : 'below'} it.`; }
       else lf.detail = `No ${up ? 'sell' : 'buy'}-side sweep yet. Watching the ${liqs.map(x => `${x[1]} ${f(x[0])}`).join(', ') || 'previous day and recent candle levels'}.`;
-      const cl = cisd(S, k, d);
+      let cl = cisd(S, k, d);
+      if (m.nocisd && cl == null) cl = b.c; // test: no CISD needed, the sweep back through the level at the zone is the trigger
       if (cl != null) { tf_.pts = 15; tf_.detail = `${up ? 'Bullish' : 'Bearish'} CISD: closed ${up ? 'above' : 'below'} ${f(cl)}, the open of the last ${up ? 'down' : 'up'}-move.`; }
       else tf_.detail = `Waiting for a ${up ? 'bullish' : 'bearish'} CISD on the ${S.tfLabel}.`;
       const want = up ? 'up' : 'down', aligned = s15 === want && s60 === want;
@@ -3564,9 +3565,7 @@ const AF = (() => {
           // exit test: the entry rules are this market's own settings; only the way profit is taken changes
           const o = { ...base.model, exit: 'split', tp2: 'far' };
           grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
-          grid.push([`5m · leave if under +0.2R after 3 bars (15 min)`, tf, { ...o, fail: '3:0.2' }]);
-          grid.push([`5m · leave if under +0.3R after 6 bars (30 min)`, tf, { ...o, fail: '6:0.3' }]);
-          grid.push([`5m · leave if under +0.5R after 12 bars (60 min)`, tf, { ...o, fail: '12:0.5' }]);
+          grid.push([`5m · same rules but NO CISD (sweep + zone is the trigger)`, tf, { ...o, nocisd: true }]);
         }
         histCtx = { inst, m1, base, grid };
         for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
