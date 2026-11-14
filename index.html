@@ -216,12 +216,28 @@ tr.open td{background:var(--gold-soft)}
   <div class="quote"><span class="px" id="px">–</span><span class="chg" id="chg"></span></div>
   <div class="controls">
     <button class="btn primary" id="share" type="button">Share signal</button>
+    <button class="btn" id="reviewBtn" type="button" aria-expanded="false" aria-controls="reviewPanel">Chart review</button>
     <button class="btn" id="setupBtn" type="button" aria-expanded="false" aria-controls="setup">Setup</button>
     <label class="btn file">Backtest a CSV<input type="file" id="csv" accept=".csv,.txt,.tsv"></label>
     <button class="btn" id="toLive" type="button" hidden>Back to live</button>
   </div>
 </header>
 <nav class="mstrip" id="watch" aria-label="Markets"></nav>
+<section class="card setup" id="reviewPanel" hidden>
+  <h3 class="tl-h">Chart review</h3>
+  <p class="hintp" style="margin-bottom:12px">Upload your own marked-up charts (daily, 4H, 15m, and optionally 5m or 1m) with your FRVP, fractal or VWAP tools drawn on them. The app joins them into one labelled image and writes a brief with the live price, the engine's levels and read, and every running trade. Send both to Claude in the chat for a full review. Nothing is uploaded anywhere by the app.</p>
+  <div class="frow" style="margin-bottom:10px"><label for="rvMarket">Market</label><select id="rvMarket"></select><input id="rvCustom" type="text" placeholder="Type the symbol, e.g. US30" hidden style="max-width:220px"></div>
+  <div class="frow" style="margin-bottom:10px"><label for="rvStrat">Strategy on the charts</label><select id="rvStrat"><option value="engine">Engine AUTO: the method that earned most in the last 14 days</option><option value="auto">Auto: read whichever tools are drawn</option><option value="frvp">Your FRVP model</option><option value="fractal">Fractal model</option><option value="vwap">VWAP</option></select></div>
+  <div class="rvslots" id="rvSlots"></div>
+  <div class="frow" style="margin:10px 0"><label for="rvNote">Your notes</label><textarea id="rvNote" rows="3" placeholder="What you see or want checked: bias, the level you are watching, the setup you are considering. Optional."></textarea></div>
+  <div class="frow" style="margin-bottom:10px"><button class="btn primary" id="rvBuild" type="button">Build review bundle</button><button class="btn" id="rvClear" type="button">Clear charts</button></div>
+  <p class="hintp" id="rvMsg"></p>
+  <div id="rvOut" hidden>
+    <div class="frow" style="margin-bottom:10px"><button class="btn" id="rvDl" type="button">Download image</button><button class="btn" id="rvCopy" type="button">Copy brief</button></div>
+    <img id="rvImg" alt="Combined charts" style="max-width:100%;border:1px solid var(--line);border-radius:6px;margin-bottom:10px">
+    <textarea id="rvBrief" rows="18" readonly style="width:100%;font-family:var(--f-mono,monospace);font-size:12px"></textarea>
+  </div>
+</section>
 <section class="card setup" id="frvpPanel" hidden>
   <div class="addhead"><h3>Fixed Range Volume Profile Pro</h3><span class="hintp" id="frMsg">Settings are saved in this browser.</span></div>
   <div class="setup-grid">
@@ -427,7 +443,6 @@ tr.open td{background:var(--gold-soft)}
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" aria-selected="true" data-tab="journal" type="button">Live signals</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="hist" type="button">History test</button>
-    <button class="tab" role="tab" aria-selected="false" data-tab="review" type="button">Chart review</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="rules" type="button">Engine rules</button>
   </div>
   <div class="pane" id="pane-journal">
@@ -466,20 +481,6 @@ tr.open td{background:var(--gold-soft)}
       <div id="chkOut"></div>
       <div id="histBreak"></div>
       <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Quality</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
-    </div>
-  </div>
-  <div class="pane" id="pane-review" hidden>
-    <p class="hintp" style="margin-bottom:12px">Upload your own marked-up charts (daily, 4H, 15m, and optionally 5m or 1m) with your FRVP, fractal or VWAP tools drawn on them. The app joins them into one labelled image and writes a brief with the live price, the engine's levels and read, and every running trade. Send both to Claude in the chat for a full review. Nothing is uploaded anywhere by the app.</p>
-    <div class="frow" style="margin-bottom:10px"><label for="rvMarket">Market</label><select id="rvMarket"></select></div>
-    <div class="frow" style="margin-bottom:10px"><label>Tools on the charts</label><span class="rvchk"><label class="chk"><input type="checkbox" id="rvFrvp" checked> FRVP</label> <label class="chk"><input type="checkbox" id="rvFrac"> Fractal model</label> <label class="chk"><input type="checkbox" id="rvVwap"> VWAP</label></span></div>
-    <div class="rvslots" id="rvSlots"></div>
-    <div class="frow" style="margin:10px 0"><label for="rvNote">Your notes</label><textarea id="rvNote" rows="3" placeholder="What you see or want checked: bias, the level you are watching, the setup you are considering. Optional."></textarea></div>
-    <div class="frow" style="margin-bottom:10px"><button class="btn primary" id="rvBuild" type="button">Build review bundle</button><button class="btn" id="rvClear" type="button">Clear charts</button></div>
-    <p class="hintp" id="rvMsg"></p>
-    <div id="rvOut" hidden>
-      <div class="frow" style="margin-bottom:10px"><button class="btn" id="rvDl" type="button">Download image</button><button class="btn" id="rvCopy" type="button">Copy brief</button></div>
-      <img id="rvImg" alt="Combined charts" style="max-width:100%;border:1px solid var(--line);border-radius:6px;margin-bottom:10px">
-      <textarea id="rvBrief" rows="18" readonly style="width:100%;font-family:var(--f-mono,monospace);font-size:12px"></textarea>
     </div>
   </div>
   <div class="pane" id="pane-rules" hidden>
@@ -3717,21 +3718,42 @@ const AF = (() => {
       rvSlotShow(k);
     });
   }
+  const RV_EXTRA = [['Metals', ['XAUUSD', 'XAGUSD']], ['Forex', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD', 'EURJPY', 'GBPJPY', 'EURGBP']], ['Futures and indices', ['US30', 'NAS100', 'SPX500', 'GER40', 'UK100', 'USOIL (WTI)', 'UKOIL (Brent)', 'Natural gas']], ['Crypto', ['BTCUSD', 'ETHUSD']], ['Synthetics (Deriv)', ['Volatility 10 Index', 'Volatility 25 Index', 'Volatility 50 Index', 'Volatility 75 Index', 'Volatility 100 Index', 'Boom 1000 Index', 'Crash 1000 Index', 'Step Index']]];
   function rvMarkets() {
-    const sel = $('#rvMarket'), on = insts.filter(i => cfg.enabled[i.def.id]), keep = sel.value;
-    sel.innerHTML = on.map(i => `<option value="${i.def.id}">${esc(i.def.label)}</option>`).join('');
-    sel.value = on.some(i => i.def.id === keep) ? keep : (cur && cfg.enabled[cur.def.id] ? cur.def.id : (on[0] ? on[0].def.id : ''));
+    const sel = $('#rvMarket'), keep = sel.value, seen = new Set();
+    let h = RV_EXTRA.map(([g, a]) => `<optgroup label="${esc(g)}">${a.map(n => { const i = insts.find(x => x.def.label === n); seen.add(n); return `<option value="${i ? esc(i.def.id) : 'X:' + esc(n)}">${esc(n)}${i && cfg.enabled[i.def.id] ? ' · live data' : ''}</option>`; }).join('')}</optgroup>`).join('');
+    const more = insts.filter(i => !seen.has(i.def.label)); if (more.length) h += `<optgroup label="Other markets in the app">${more.map(i => `<option value="${esc(i.def.id)}">${esc(i.def.label)}</option>`).join('')}</optgroup>`;
+    sel.innerHTML = h + '<option value="CUSTOM">Other (type the symbol)</option>';
+    const want = keep || (cur ? cur.def.id : ''); if ([...sel.options].some(o => o.value === want)) sel.value = want; else sel.value = sel.options[0].value;
+    $('#rvCustom').hidden = sel.value !== 'CUSTOM';
   }
-  function rvBrief(inst) {
-    const d = inst.def, S_ = inst.S, e = S_ && S_.lastEval, off = cfg.offsets[d.id] || 0, dec = S_ ? S_.dec : (d.dec || 2);
+  function rvPick() {
+    const v = $('#rvMarket').value;
+    if (v === 'CUSTOM') return { inst: null, label: ($('#rvCustom').value.trim() || 'Unnamed market') };
+    if (v.startsWith('X:')) return { inst: null, label: v.slice(2) };
+    const i = byId[v]; return { inst: i || null, label: i ? i.def.label : v };
+  }
+  function rvBrief(pk) {
+    const inst = pk.inst, d = inst ? inst.def : { id: pk.label, label: pk.label }, S_ = inst && cfg.enabled[d.id] ? inst.S : null, e = S_ && S_.lastEval, off = cfg.offsets[d.id] || 0, dec = S_ ? S_.dec : 2;
     const P = x => (x == null || !isFinite(x)) ? '–' : (x + off).toFixed(dec), L = [], now = new Date();
-    const tools = [$('#rvFrvp').checked && 'FRVP (fixed range volume profile)', $('#rvFrac').checked && 'Fractal model (HTF candle 2 sweep + CISD)', $('#rvVwap').checked && 'VWAP'].filter(Boolean).join(', ') || 'not stated';
+    const stratV = $('#rvStrat').value;
+    let autoTxt = '';
+    if (stratV === 'engine') {
+      const since = Date.now() - 14 * 86400e3, fam = t => /fractal/i.test(t.setup) ? 'Fractal model' : /^FRVP/i.test(t.setup) ? 'Your FRVP model' : 'Other', g = {};
+      for (const t of ledger.filter(t => t.mk === d.id && t.result !== null && (t.exitT || t.t) >= since)) { const k = fam(t); (g[k] = g[k] || []).push(t.result); }
+      const rows = Object.entries(g).map(([k, a]) => ({ k, n: a.length, r: a.reduce((x, y) => x + y, 0) })), ok = rows.filter(x => x.n >= 4).sort((a, b) => b.r - a.r);
+      const best = ok[0] && ok[0].r > 0 ? ok[0] : null;
+      autoTxt = `Engine AUTO mode picks, each week, the method that earned the most R over the last 14 days of closed signals (at least 4 trades needed, and it stands aside if none made money). ` +
+        (rows.length ? 'Closed ' + d.label + ' signals in the last 14 days: ' + rows.map(x => `${x.k} ${x.n} trades ${x.r >= 0 ? '+' : ''}${x.r.toFixed(2)}R`).join('; ') + '. ' : 'No closed ' + d.label + ' signals in the last 14 days. ') +
+        (best ? `AUTO pick now: ${best.k}.` : 'AUTO has no pick yet (not enough closed trades, or none made money): choose the method the charts support best and say which and why. AUTO is a test and was not proven in backtests.');
+    }
+    const tools = { engine: autoTxt, auto: 'not stated: please identify which tools are drawn (FRVP, fractal model, VWAP) and read the charts with them', frvp: 'FRVP (fixed range volume profile)', fractal: 'Fractal model (HTF candle 2 sweep + CISD)', vwap: 'VWAP' }[$('#rvStrat').value];
     const have = RV_SLOTS.filter(([k]) => rvImgs[k]).map(([, n]) => n.replace(' (optional)', '')).join(', ') || 'none';
     L.push(`CHART REVIEW REQUEST — ${d.label}`);
-    L.push(`Built ${now.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local (${now.toISOString().slice(0, 16).replace('T', ' ')} UTC). Charts attached in the image: ${have}. Tools drawn by the trader: ${tools}.`);
+    L.push(`Built ${now.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local (${now.toISOString().slice(0, 16).replace('T', ' ')} UTC). Charts attached in the image: ${have}. ${stratV === 'engine' ? 'Strategy requested: ' : 'Tools drawn by the trader: '}${tools}`);
     L.push(`Prices below are shifted to the trader's broker chart (offset ${off >= 0 ? '+' : ''}${off}).`);
     L.push('');
-    if (!S_ || !S_.cur) { L.push('LIVE DATA: the engine has no live data for this market yet (feed not connected). Review the screenshots only.'); }
+    if (!S_ || !S_.cur) { L.push(`LIVE DATA: the engine is not scanning ${d.label} right now, so there is no live price or engine read. Review the screenshots only.`); }
     else {
       const px = S_.cur.c, pip = d.rng ? 1 : S_.pip;
       L.push('LIVE DATA (from the engine, ' + (S_.tfLabel || '') + ' bars)');
@@ -3763,28 +3785,28 @@ const AF = (() => {
     return L.join('\n');
   }
   async function rvBuild() {
-    const inst = byId[$('#rvMarket').value], msg = $('#rvMsg');
-    if (!inst) { msg.textContent = 'Turn on a market first.'; return; }
+    const pk = rvPick(), inst = pk.inst, msg = $('#rvMsg');
     const keys = RV_SLOTS.map(x => x[0]).filter(k => rvImgs[k]);
     if (!keys.length) { msg.textContent = 'Add at least one chart screenshot first.'; return; }
     msg.textContent = 'Building…';
     const imgs = await Promise.all(keys.map(k => new Promise(r => { const im = new Image(); im.onload = () => r(im); im.src = rvImgs[k]; })));
-    const W = 1500, HEAD = 56, BAR = 40, brief = rvBrief(inst), S_ = inst.S, px = S_ && S_.cur ? S_.cur.c : null, off = cfg.offsets[inst.def.id] || 0;
+    const W = 1500, HEAD = 56, BAR = 40, brief = rvBrief(pk), S_ = inst && cfg.enabled[inst.def.id] ? inst.S : null, px = S_ && S_.cur ? S_.cur.c : null, off = inst ? cfg.offsets[inst.def.id] || 0 : 0;
     const hs = imgs.map(im => Math.round(im.height * W / im.width)), H = HEAD + hs.reduce((a, h) => a + BAR + h, 0), c = document.createElement('canvas'); c.width = W; c.height = H;
     const g = c.getContext('2d'); g.fillStyle = '#0b1220'; g.fillRect(0, 0, W, H); g.fillStyle = '#e7ecf5'; g.font = 'bold 26px sans-serif'; g.textBaseline = 'middle';
-    g.fillText(`${inst.def.label} chart review · ${new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local${px != null ? ' · live price ' + (px + off).toFixed(S_.dec) : ''}`, 16, HEAD / 2);
+    g.fillText(`${pk.label} chart review · ${new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local${px != null ? ' · live price ' + (px + off).toFixed(S_.dec) : ''}`, 16, HEAD / 2);
     let y = HEAD; imgs.forEach((im, i) => { g.fillStyle = '#1b2740'; g.fillRect(0, y, W, BAR); g.fillStyle = '#f0c24a'; g.font = 'bold 22px sans-serif'; g.fillText(RV_SLOTS.find(x => x[0] === keys[i])[1].replace(' (optional)', ''), 16, y + BAR / 2); g.drawImage(im, 0, y + BAR, W, hs[i]); y += BAR + hs[i]; });
-    const url = c.toDataURL('image/jpeg', 0.85); $('#rvImg').src = url; $('#rvBrief').value = brief; $('#rvOut').hidden = false; rvOut.url = url; rvOut.name = `${inst.def.label.replace(/\W+/g, '')}-chart-review-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.jpg`;
+    const url = c.toDataURL('image/jpeg', 0.85); $('#rvImg').src = url; $('#rvBrief').value = brief; $('#rvOut').hidden = false; rvOut.url = url; rvOut.name = `${pk.label.replace(/\W+/g, '')}-chart-review-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.jpg`;
     msg.textContent = 'Ready. Download the image and copy the brief, then send both to Claude in the chat. The live data is a snapshot from this moment, so send them soon after building.';
   }
   const rvOut = { url: '', name: '' };
-  $('#rvBuild').onclick = rvBuild;
+  $('#rvBuild').onclick = rvBuild; $('#rvMarket').onchange = () => { $('#rvCustom').hidden = $('#rvMarket').value !== 'CUSTOM'; };
+  $('#reviewBtn').onclick = () => { const s = $('#reviewPanel'); s.hidden = !s.hidden; $('#reviewBtn').setAttribute('aria-expanded', !s.hidden); if (!s.hidden) { rvInit(); rvMarkets(); s.scrollIntoView({ block: 'nearest' }); } };
   $('#rvClear').onclick = () => { for (const k of Object.keys(rvImgs)) delete rvImgs[k]; RV_SLOTS.forEach(([k]) => rvSlotShow(k)); $('#rvOut').hidden = true; $('#rvMsg').textContent = ''; };
   $('#rvDl').onclick = () => { if (!rvOut.url) return; const a = document.createElement('a'); a.href = rvOut.url; a.download = rvOut.name; document.body.appendChild(a); a.click(); a.remove(); };
   $('#rvCopy').onclick = async () => { const t = $('#rvBrief'); try { await navigator.clipboard.writeText(t.value); $('#rvMsg').textContent = 'Brief copied.'; } catch (e) { t.select(); document.execCommand('copy'); $('#rvMsg').textContent = 'Brief copied.'; } };
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
-    $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist'; $('#pane-review').hidden = t.dataset.tab !== 'review'; if (t.dataset.tab === 'review') { rvInit(); rvMarkets(); }
+    $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist';
     if (t.dataset.tab === 'journal') journalDirty = true;
   });
   $('#csv').onchange = async e => {
