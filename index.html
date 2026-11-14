@@ -116,6 +116,12 @@ dl.read dt{color:var(--muted)} dl.read dd{margin:0;text-align:right;font-family:
 .lower{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
 .tabs{display:flex;gap:4px;padding:8px 10px 0;border-bottom:1px solid var(--line)}
 .tab{background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 12px;font-family:var(--f-display);font-weight:600;font-size:14px;color:var(--muted);cursor:pointer}
+.rvslots{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.rvslot{border:1px dashed var(--line);border-radius:8px;padding:8px;min-height:120px;display:flex;flex-direction:column;gap:6px;outline:none}
+.rvslot:focus,.rvslot.drag{border-color:var(--gold)}
+.rvslot b{font-size:13px}.rvslot img{max-width:100%;border-radius:4px}.rvslot small{color:var(--mute,#8a93a6)}
+.rvchk{display:inline-flex;gap:14px;flex-wrap:wrap}
+#rvNote{width:100%;max-width:640px}
 .tab[aria-selected="true"]{color:var(--fg);border-color:var(--gold)}
 .pane{padding:16px}
 .notice{font-size:12.5px;color:var(--gold);background:var(--gold-soft);border:1px solid rgba(226,179,73,.3);border-radius:6px;padding:8px 12px;margin-bottom:14px}
@@ -421,6 +427,7 @@ tr.open td{background:var(--gold-soft)}
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" aria-selected="true" data-tab="journal" type="button">Live signals</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="hist" type="button">History test</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="review" type="button">Chart review</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="rules" type="button">Engine rules</button>
   </div>
   <div class="pane" id="pane-journal">
@@ -459,6 +466,20 @@ tr.open td{background:var(--gold-soft)}
       <div id="chkOut"></div>
       <div id="histBreak"></div>
       <div class="tablewrap"><table class="tl"><thead><tr><th class="num">#</th><th>Signal time</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th><th class="num">Quality</th><th>Outcome</th><th>Why it fired</th></tr></thead><tbody id="histTradesBody"></tbody></table></div>
+    </div>
+  </div>
+  <div class="pane" id="pane-review" hidden>
+    <p class="hintp" style="margin-bottom:12px">Upload your own marked-up charts (daily, 4H, 15m, and optionally 5m or 1m) with your FRVP, fractal or VWAP tools drawn on them. The app joins them into one labelled image and writes a brief with the live price, the engine's levels and read, and every running trade. Send both to Claude in the chat for a full review. Nothing is uploaded anywhere by the app.</p>
+    <div class="frow" style="margin-bottom:10px"><label for="rvMarket">Market</label><select id="rvMarket"></select></div>
+    <div class="frow" style="margin-bottom:10px"><label>Tools on the charts</label><span class="rvchk"><label class="chk"><input type="checkbox" id="rvFrvp" checked> FRVP</label> <label class="chk"><input type="checkbox" id="rvFrac"> Fractal model</label> <label class="chk"><input type="checkbox" id="rvVwap"> VWAP</label></span></div>
+    <div class="rvslots" id="rvSlots"></div>
+    <div class="frow" style="margin:10px 0"><label for="rvNote">Your notes</label><textarea id="rvNote" rows="3" placeholder="What you see or want checked: bias, the level you are watching, the setup you are considering. Optional."></textarea></div>
+    <div class="frow" style="margin-bottom:10px"><button class="btn primary" id="rvBuild" type="button">Build review bundle</button><button class="btn" id="rvClear" type="button">Clear charts</button></div>
+    <p class="hintp" id="rvMsg"></p>
+    <div id="rvOut" hidden>
+      <div class="frow" style="margin-bottom:10px"><button class="btn" id="rvDl" type="button">Download image</button><button class="btn" id="rvCopy" type="button">Copy brief</button></div>
+      <img id="rvImg" alt="Combined charts" style="max-width:100%;border:1px solid var(--line);border-radius:6px;margin-bottom:10px">
+      <textarea id="rvBrief" rows="18" readonly style="width:100%;font-family:var(--f-mono,monospace);font-size:12px"></textarea>
     </div>
   </div>
   <div class="pane" id="pane-rules" hidden>
@@ -3667,9 +3688,103 @@ const AF = (() => {
   $('#clsReset').onclick = () => { if (cfg.own[cur.def.id]) delete cfg.own[cur.def.id]; else cfg.classes[curCls()] = JSON.parse(JSON.stringify(CLASS_DEFAULTS[curCls()])); saveCfg(); setTimeout(() => location.reload(), 200); };
   $('#ownChk').onchange = () => { if ($('#ownChk').checked) cfg.own[cur.def.id] = JSON.parse(JSON.stringify(cfg.classes[curCls()])); else delete cfg.own[cur.def.id]; saveCfg(); setTimeout(() => location.reload(), 200); };
   const reEval = () => S && S.bars.length ? AF.evaluate(S, S.bars.length - 1) : null;
+  // ---- Chart review: your marked-up charts + live engine data, bundled for a full review in the Claude chat ----
+  const RV_SLOTS = [['d1', 'Daily'], ['h4', '4H'], ['m15', '15m'], ['m5', '5m (optional)'], ['m1', '1m (optional)']], rvImgs = {};
+  function rvFit(file) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader(); fr.onerror = rej;
+      fr.onload = () => { const im = new Image(); im.onerror = rej; im.onload = () => { const k = Math.min(1, 1500 / im.width), c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.88)); }; im.src = fr.result; };
+      fr.readAsDataURL(file);
+    });
+  }
+  function rvSlotShow(key) {
+    const box = document.querySelector(`.rvslot[data-k="${key}"] .rvprev`); if (!box) return;
+    box.innerHTML = rvImgs[key] ? `<img src="${rvImgs[key]}" alt="">` : '<small>Click here, then paste (Ctrl+V), drop a file, or choose one.</small>';
+  }
+  async function rvSet(key, file) {
+    if (!file || !/^image\//.test(file.type)) return;
+    try { rvImgs[key] = await rvFit(file); rvSlotShow(key); } catch (e) { $('#rvMsg').textContent = 'That image could not be read. Try a PNG or JPG screenshot.'; }
+  }
+  function rvInit() {
+    const box = $('#rvSlots'); if (box.dataset.ready) return; box.dataset.ready = 1;
+    box.innerHTML = RV_SLOTS.map(([k, n]) => `<div class="rvslot" data-k="${k}" tabindex="0"><b>${n}</b><div class="rvprev"></div><input type="file" accept="image/*" hidden><button class="btn" type="button">Choose file</button></div>`).join('');
+    box.querySelectorAll('.rvslot').forEach(el => {
+      const k = el.dataset.k, inp = el.querySelector('input');
+      el.querySelector('button').onclick = () => inp.click(); inp.onchange = () => { rvSet(k, inp.files[0]); inp.value = ''; };
+      el.addEventListener('paste', e => { const f = [...(e.clipboardData ? e.clipboardData.items : [])].find(i => i.type.startsWith('image/')); if (f) { e.preventDefault(); rvSet(k, f.getAsFile()); } });
+      el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag'); }); el.addEventListener('dragleave', () => el.classList.remove('drag'));
+      el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('drag'); rvSet(k, e.dataTransfer.files[0]); });
+      rvSlotShow(k);
+    });
+  }
+  function rvMarkets() {
+    const sel = $('#rvMarket'), on = insts.filter(i => cfg.enabled[i.def.id]), keep = sel.value;
+    sel.innerHTML = on.map(i => `<option value="${i.def.id}">${esc(i.def.label)}</option>`).join('');
+    sel.value = on.some(i => i.def.id === keep) ? keep : (cur && cfg.enabled[cur.def.id] ? cur.def.id : (on[0] ? on[0].def.id : ''));
+  }
+  function rvBrief(inst) {
+    const d = inst.def, S_ = inst.S, e = S_ && S_.lastEval, off = cfg.offsets[d.id] || 0, dec = S_ ? S_.dec : (d.dec || 2);
+    const P = x => (x == null || !isFinite(x)) ? '–' : (x + off).toFixed(dec), L = [], now = new Date();
+    const tools = [$('#rvFrvp').checked && 'FRVP (fixed range volume profile)', $('#rvFrac').checked && 'Fractal model (HTF candle 2 sweep + CISD)', $('#rvVwap').checked && 'VWAP'].filter(Boolean).join(', ') || 'not stated';
+    const have = RV_SLOTS.filter(([k]) => rvImgs[k]).map(([, n]) => n.replace(' (optional)', '')).join(', ') || 'none';
+    L.push(`CHART REVIEW REQUEST — ${d.label}`);
+    L.push(`Built ${now.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local (${now.toISOString().slice(0, 16).replace('T', ' ')} UTC). Charts attached in the image: ${have}. Tools drawn by the trader: ${tools}.`);
+    L.push(`Prices below are shifted to the trader's broker chart (offset ${off >= 0 ? '+' : ''}${off}).`);
+    L.push('');
+    if (!S_ || !S_.cur) { L.push('LIVE DATA: the engine has no live data for this market yet (feed not connected). Review the screenshots only.'); }
+    else {
+      const px = S_.cur.c, pip = d.rng ? 1 : S_.pip;
+      L.push('LIVE DATA (from the engine, ' + (S_.tfLabel || '') + ' bars)');
+      L.push(`Price ${P(px)}${e ? `, ATR ${(e.atr / pip).toFixed(0)} pips` : ''}.`);
+      if (e && e.prof) {
+        const p = e.prof, hv = (p.zones || []).slice(0, 6).map(z => P(z.price)).join(', '), lv = (p.lvns || []).slice(0, 4).map(z => P(z.price)).join(', ');
+        L.push(`Profile (previous day + today, day starts 22:00 UTC): POC ${P(p.poc)}, VAH ${P(p.vah)}, VAL ${P(p.val)}. High-volume nodes: ${hv || '–'}. Thin rows: ${lv || '–'}.`);
+        L.push(`VWAP ${P(e.vw)}${e.pdh != null ? `. Previous day high ${P(e.pdh)}, low ${P(e.pdl)}` : ''}. Price is ${px > p.vah ? 'above' : px < p.val ? 'below' : 'inside'} value.`);
+      }
+      if (e && e.s240 != null) L.push(`Structure: 4H ${e.s240}, 1H ${e.s60}, 15m ${e.s15}. ${e.tdText || ''}${e.c4Text ? ' ' + e.c4Text : ''}`);
+      if (e && e.rg) L.push(`Day type: ${e.rg.kind === 'balance' ? 'balanced' : e.rg.kind === 'up' ? 'trending up' : e.rg.kind === 'down' ? 'trending down' : e.rg.kind}.`);
+      if (e) for (const [nm, sd] of [['Long', e.long], ['Short', e.short]]) if (sd) L.push(`Engine ${nm.toLowerCase()} case: ${sd.fire ? 'FIRED. ' + sd.setup : 'no signal'}. ${sd.why || ''} ${sd.plan ? 'Plan: ' + sd.plan : ''}`.replace(/\s+/g, ' ').trim());
+      if (!e) L.push('The engine has no read yet on this market.');
+    }
+    L.push('');
+    const open = ledger.filter(t => t.result === null), line = t => { const i = byId[t.mk], q = i && i.S && i.S.cur ? i.S.cur.c : t.entry, r = signalR(t, q), o = t.offset != null ? t.offset : (cfg.offsets[t.mk] || 0), f = x => (x + o).toFixed(t.dec); return `- ${t.label} ${t.dir > 0 ? 'BUY' : 'SELL'} (${t.setup}) opened ${new Date(t.t).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}: entry ${f(t.entry)}, stop ${f(t.sl)}${t.stage ? ' (moved to breakeven, half taken)' : ''}, TP1 ${f(t.tp1)}, TP2 ${f(t.tp2)}; now ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`; };
+    L.push(`RUNNING TRADES IN THE ENGINE (${open.length})`); if (open.length) open.forEach(t => L.push(line(t))); else L.push('None.');
+    const closed = ledger.filter(t => t.mk === d.id && t.result !== null).slice(-5).reverse();
+    if (closed.length) { L.push(''); L.push(`LAST CLOSED ${d.label} SIGNALS`); closed.forEach(t => L.push(`- ${t.dir > 0 ? 'BUY' : 'SELL'} ${t.setup}: ${t.status}, ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R`)); }
+    const note = $('#rvNote').value.trim(); if (note) { L.push(''); L.push('TRADER NOTES: ' + note); }
+    L.push('');
+    L.push('PLEASE RETURN');
+    L.push('1. What you see on each chart (daily, 4H, 15m) and where the trader\'s tools place value, liquidity and bias.');
+    L.push('2. A verdict: BUY, SELL or NO TRADE now, with the reasons and the conditions that would change it.');
+    L.push('3. If a trade: the entry trigger on the 5-minute or 1-minute chart, stop, TP1, TP2, and the reward to risk.');
+    L.push('4. Whether you agree with the engine\'s read and each running trade above, and where the two differ.');
+    L.push('5. What would invalidate the idea.');
+    L.push('Context: the engine\'s rules are unproven. A 270-day gold backtest was close to flat after costs, so treat the engine read as one input, not as truth. Answer from the charts first.');
+    return L.join('\n');
+  }
+  async function rvBuild() {
+    const inst = byId[$('#rvMarket').value], msg = $('#rvMsg');
+    if (!inst) { msg.textContent = 'Turn on a market first.'; return; }
+    const keys = RV_SLOTS.map(x => x[0]).filter(k => rvImgs[k]);
+    if (!keys.length) { msg.textContent = 'Add at least one chart screenshot first.'; return; }
+    msg.textContent = 'Building…';
+    const imgs = await Promise.all(keys.map(k => new Promise(r => { const im = new Image(); im.onload = () => r(im); im.src = rvImgs[k]; })));
+    const W = 1500, HEAD = 56, BAR = 40, brief = rvBrief(inst), S_ = inst.S, px = S_ && S_.cur ? S_.cur.c : null, off = cfg.offsets[inst.def.id] || 0;
+    const hs = imgs.map(im => Math.round(im.height * W / im.width)), H = HEAD + hs.reduce((a, h) => a + BAR + h, 0), c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d'); g.fillStyle = '#0b1220'; g.fillRect(0, 0, W, H); g.fillStyle = '#e7ecf5'; g.font = 'bold 26px sans-serif'; g.textBaseline = 'middle';
+    g.fillText(`${inst.def.label} chart review · ${new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} local${px != null ? ' · live price ' + (px + off).toFixed(S_.dec) : ''}`, 16, HEAD / 2);
+    let y = HEAD; imgs.forEach((im, i) => { g.fillStyle = '#1b2740'; g.fillRect(0, y, W, BAR); g.fillStyle = '#f0c24a'; g.font = 'bold 22px sans-serif'; g.fillText(RV_SLOTS.find(x => x[0] === keys[i])[1].replace(' (optional)', ''), 16, y + BAR / 2); g.drawImage(im, 0, y + BAR, W, hs[i]); y += BAR + hs[i]; });
+    const url = c.toDataURL('image/jpeg', 0.85); $('#rvImg').src = url; $('#rvBrief').value = brief; $('#rvOut').hidden = false; rvOut.url = url; rvOut.name = `${inst.def.label.replace(/\W+/g, '')}-chart-review-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.jpg`;
+    msg.textContent = 'Ready. Download the image and copy the brief, then send both to Claude in the chat. The live data is a snapshot from this moment, so send them soon after building.';
+  }
+  const rvOut = { url: '', name: '' };
+  $('#rvBuild').onclick = rvBuild;
+  $('#rvClear').onclick = () => { for (const k of Object.keys(rvImgs)) delete rvImgs[k]; RV_SLOTS.forEach(([k]) => rvSlotShow(k)); $('#rvOut').hidden = true; $('#rvMsg').textContent = ''; };
+  $('#rvDl').onclick = () => { if (!rvOut.url) return; const a = document.createElement('a'); a.href = rvOut.url; a.download = rvOut.name; document.body.appendChild(a); a.click(); a.remove(); };
+  $('#rvCopy').onclick = async () => { const t = $('#rvBrief'); try { await navigator.clipboard.writeText(t.value); $('#rvMsg').textContent = 'Brief copied.'; } catch (e) { t.select(); document.execCommand('copy'); $('#rvMsg').textContent = 'Brief copied.'; } };
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
-    $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist';
+    $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist'; $('#pane-review').hidden = t.dataset.tab !== 'review'; if (t.dataset.tab === 'review') { rvInit(); rvMarkets(); }
     if (t.dataset.tab === 'journal') journalDirty = true;
   });
   $('#csv').onchange = async e => {
