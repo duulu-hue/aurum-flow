@@ -1301,6 +1301,8 @@ const AF = (() => {
         day: rgk === 'balance' ? 'balanced' : rgk === want ? 'trend with' : 'trend against', rr1: rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R',
         delta: of.na ? null : of.pts > 0 ? 'agrees' : 'does not agree', side: up ? 'long' : 'short',
         h4: s240 === want ? 'with' : s240 === 'none' ? 'undecided' : 'against', td: verdict === want ? 'agrees' : verdict === 'none' ? 'mixed' : 'against', c4: c4dir === d ? 'with' : c4dir ? 'against' : 'no setup' };
+      { const rb = (n) => { const j = Math.max(0, k - n), x = d * (S.bars[j].c - b.c) / atr; return x < 2 ? 'under 2 ATR' : x < 4 ? '2 to 4 ATR' : x < 6 ? '4 to 6 ATR' : '6 ATR or more'; };
+        tags.run1h = rb(Math.round(3600e3 / S.interval)); tags.run4h = rb(Math.round(4 * 3600e3 / S.interval)); }
       if (mtfOk && mtfTxt && zone) zf.detail = zDetail0 + ' ' + mtfTxt;
       tags.vwap = vwAt ? 'on the zone' : 'away'; if (vwAt && zone) zf.detail += ` VWAP ${f(vw)} sits on the zone.`;
       tags.setup = 'reversal'; tags.entry = obFill ? 'order block' : m.confirm ? 'retest' : 'CISD';
@@ -3513,7 +3515,7 @@ const AF = (() => {
     const sess = t => { const h = new Date(t.t).getUTCHours(); return h >= 22 || h < 6 ? 'Asia (01:00–09:00 Nairobi)' : h < 12 ? 'London (09:00–15:00)' : 'New York (15:00–23:00)'; };
     const groups = [
       ['Setup', t => t.tags.setup], ['Entry', t => t.tags.entry], ['VWAP', t => t.tags.vwap], ['Liquidity taken', t => t.tags.liq], ['Zone', t => t.tags.zone], ['Zone stacked on another level', t => t.tags.stacked ? 'yes' : 'no'],
-      ['Session', sess], ['4H candle model', t => t.tags.c4], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day],
+      ['Session', sess], ['4H candle model', t => t.tags.c4], ['Top-down 4H & 1H', t => t.tags.td], ['4H structure', t => t.tags.h4], ['1H structure', t => t.tags.h1], ['15m structure', t => t.tags.m15], ['Day type', t => t.tags.day], ['Price ran into the setup (last 1H)', t => t.tags.run1h], ['Price ran into the setup (last 4H)', t => t.tags.run4h],
       ['TP1 distance', t => t.tags.rr1], ['Delta', t => t.tags.delta], ['Side', t => t.tags.side], ['Quality band', t => t.q >= 80 ? 'A+' : t.q >= 65 ? 'A' : 'B']
     ];
     const rows = [];
