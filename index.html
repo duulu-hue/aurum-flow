@@ -763,7 +763,7 @@ const AF = (() => {
   }
 
   // the profile the engine trades from: rolling window, today's session, or the previous session
-  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', fail: '', nocisd: false, dayskip: false };
+  const MODEL_DEFAULTS = { dayStart: 1320, sweep: true, delta: false, chop: true, minRR: 2.5, sweepBars: 16, zoneBars: 4, tpo: false, exit: 'split', align: false, confirm: false, noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', fail: '', nocisd: false, dayskip: false, fresh: false };
   const modelOpts = S => Object.assign({}, MODEL_DEFAULTS, (S.params && S.params.model) || {});
   // the user's anchor: start of the previous trading day through now (two-day composite)
   function twoDay(S, k) {
@@ -1045,7 +1045,15 @@ const AF = (() => {
       for (const z of prof.zones) if (up ? z.price <= b.c + atr : z.price >= b.c - atr) zones.push({ name: up ? 'support HVN' : 'resistance HVN', lo: z.lo, hi: z.hi, price: z.price });
       zones.push(up ? { name: 'VAL', lo: prof.val - half, hi: prof.val + half, price: prof.val } : { name: 'VAH', lo: prof.vah - half, hi: prof.vah + half, price: prof.vah });
       let zone = null;
+      // trader's rule: a POC that price already visited earlier in today's session is used up; only its first visit is traded
+      const stalePoc = z => {
+        if (!m.fresh || z.name !== 'POC') return false;
+        const td = twoDay(S, k), lo = z.lo - 0.1 * atr, hi = z.hi + 0.1 * atr; let groups = 0, last = -1e9;
+        for (const j of td.today) { if (j > k) break; const x = S.bars[j]; if (x.l <= hi && x.h >= lo) { if (j - last > armBars) groups++; last = j; } }
+        return groups > 1;
+      };
       for (const z of zones) {
+        if (stalePoc(z)) continue;
         const touched = up ? ext <= z.hi : ext >= z.lo, held = up ? b.c > z.price : b.c < z.price, near = up ? b.c - z.hi <= atr : z.lo - b.c <= atr;
         if (touched && held && near && (!zone || Math.abs(b.c - z.price) < Math.abs(b.c - zone.price))) zone = z;
       }
@@ -3674,6 +3682,9 @@ const AF = (() => {
           // exit test: the entry rules are this market's own settings; only the way profit is taken changes
           const o = { ...base.model, exit: 'split', tp2: 'far' };
           grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
+          grid.push([`5m · your rule: POC first visit only (a tested POC is not traded again)`, tf, { ...o, fresh: true }]);
+          grid.push([`5m · your rule: first-visit POC + VWAP on the POC`, tf, { ...o, fresh: true, vwz: 'poc' }]);
+          grid.push([`5m · your rule: break below/above POC, then retest and rejection`, tf, { ...o, bkd: 'tight' }]);
           grid.push([`5m · market profile: 80% rule only (open outside value, back inside for two 30m closes)`, tf, { mp: { r1: true, r2: false } }]);
           grid.push([`5m · market profile: acceptance pullback only (two 30m closes beyond value, rejected pullback)`, tf, { mp: { r1: false, r2: true } }]);
           grid.push([`5m · market profile: both rules`, tf, { mp: { r1: true, r2: true } }]);
