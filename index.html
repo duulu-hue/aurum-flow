@@ -230,8 +230,12 @@ tr.open td{background:var(--gold-soft)}
   <div class="frow" style="margin-bottom:10px"><label for="rvStrat">Strategy on the charts</label><select id="rvStrat"><option value="engine">Engine AUTO: the method that earned most in the last 14 days</option><option value="auto">Auto: read whichever tools are drawn</option><option value="frvp">Your FRVP model</option><option value="fractal">Fractal model</option><option value="vwap">VWAP</option></select></div>
   <div class="rvslots" id="rvSlots"></div>
   <div class="frow" style="margin:10px 0"><label for="rvNote">Your notes</label><textarea id="rvNote" rows="3" placeholder="What you see or want checked: bias, the level you are watching, the setup you are considering. Optional."></textarea></div>
-  <div class="frow" style="margin-bottom:10px"><button class="btn primary" id="rvBuild" type="button">Build review bundle</button><button class="btn" id="rvClear" type="button">Clear charts</button></div>
+  <div class="frow" style="margin-bottom:6px"><label for="rvKeyIn">Anthropic API key</label><input id="rvKeyIn" type="password" autocomplete="off" placeholder="sk-ant-…" style="max-width:340px"><button class="btn" id="rvKeySave" type="button">Save key</button><button class="btn" id="rvKeyClear" type="button">Remove key</button></div>
+  <p class="hintp" style="margin-bottom:10px"><span id="rvKeyState"></span> The key is stored only in this browser. When you press Analyse, your screenshots and the brief go straight from this page to Anthropic's API, and each review is billed to your API account (typically a few cents). Without a key you can still build the free bundle.</p>
+  <div class="frow" style="margin-bottom:10px"><button class="btn primary" id="rvDataBtn" type="button">Analyse from live data (free)</button><button class="btn primary" id="rvAi" type="button">Analyse screenshots (API key)</button><button class="btn" id="rvBuild" type="button">Build review bundle (free)</button><button class="btn" id="rvClear" type="button">Clear charts</button></div>
   <p class="hintp" id="rvMsg"></p>
+  <div id="rvData" hidden></div>
+  <div id="rvResult" hidden></div>
   <div id="rvOut" hidden>
     <div class="frow" style="margin-bottom:10px"><button class="btn" id="rvDl" type="button">Download image</button><button class="btn" id="rvCopy" type="button">Copy brief</button></div>
     <img id="rvImg" alt="Combined charts" style="max-width:100%;border:1px solid var(--line);border-radius:6px;margin-bottom:10px">
@@ -454,9 +458,10 @@ tr.open td{background:var(--gold-soft)}
   </div>
   <div class="pane" id="pane-hist" hidden>
     <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, rebuilt into 1, 3, 5 and 15-minute entries, each with the day-type filter on and off, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
-    <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="p90">Previous 90 days (days 91–180 back)</option><option value="p180">Oldest 90 days (days 181–270 back, untouched so far)</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
+    <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="270">All 270 days (3 blocks of 90)</option><option value="p90">Previous 90 days (days 91–180 back)</option><option value="p180">Oldest 90 days (days 181–270 back, untouched so far)</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
+    <div id="histBlocks" hidden></div>
     <div id="histPath" hidden>
       <h3 class="tl-h">Trade path</h3>
       <p class="hintp" id="histPathMsg"></p>
@@ -844,6 +849,7 @@ const AF = (() => {
   function evaluate(S, k) {
     if (S.params && S.params.strategy === 'frvp') return modelEval(S, k);
     if (S.params && S.params.strategy === 'fm') return fmEval(S, k);
+    if (S.params && S.params.strategy === 'mp') return mpEval(S, k);
     const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN);
     const prof = engineProfile(S, k);
     const vw = S.vwap[k], sd = S.vsd[k];
@@ -1490,6 +1496,77 @@ const AF = (() => {
     return { k, t: b.t, price: b.c, atr, prof, vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, fm: true };
   }
 
+  // ---- market profile acceptance model (test): the previous day's value area decides balance or trend
+  //  Rule 1 (80% rule): the day opens outside yesterday's value area, then two 30-minute closes in a row come back inside:
+  //    trade toward the other side of value. Rule 2 (acceptance): two 30-minute closes in a row beyond VAH/VAL, then trade the
+  //    first rejected pullback to that edge in the direction of the break. Rules are fixed in advance; nothing is tuned.
+  function mpEval(S, k) {
+    const b = S.bars[k], atr = Math.max(S.atr[k] || 0, S.BIN), vw = S.vwap[k], sd = S.vsd[k], cost = S.params.costPrice || 0;
+    const o = { r1: true, r2: true, ...(S.params.mp || {}) }, f = x => x.toFixed(S.dec);
+    const hrs = S.params.hours, inHours = !hrs || inWindow(b.t + S.interval, hrs);
+    const td = twoDay(S, k), day = td.today.length ? td.today[0] : k;
+    let st = S._mp;
+    if (!st || st.day !== day || st.k > k) {
+      let p = td.prev.length >= 24 ? frvp(S, td.prev, td.o) : null; if (p && p.noVolume) p = frvp(S, td.prev, { ...td.o, tpo: true });
+      const open = S.bars[day].o, va = p ? { vah: p.vah, val: p.val, poc: p.poc } : null;
+      st = S._mp = { day, k: day - 1, va, open, openSide: !va ? null : open > va.vah ? 'above' : open < va.val ? 'below' : 'inside', c30: [], r1: false, acc: null, accK: -1, r2: { 1: false, '-1': false }, sig: { 1: null, '-1': null } };
+    }
+    const va = st.va;
+    if (k > st.k) {
+      st.sig = { 1: null, '-1': null };
+      for (let j = st.k + 1; j <= k; j++) {
+        const x = S.bars[j]; if (j < day) continue;
+        const last = j === k;
+        if (va && (x.t + S.interval) % (30 * 60000) === 0) {
+          st.c30.push(x.c > va.vah ? 'above' : x.c < va.val ? 'below' : 'inside');
+          const n = st.c30.length, a = st.c30[n - 1], bb = st.c30[n - 2];
+          if (o.r1 && !st.r1 && (st.openSide === 'above' || st.openSide === 'below') && a === 'inside' && bb === 'inside') { st.r1 = true; if (last) st.sig[st.openSide === 'below' ? 1 : -1] = { rule: 1 }; }
+          if (n >= 2 && a === bb && a !== 'inside') { if (st.acc !== a) { st.acc = a; st.accK = j; } } else if (a === 'inside' || (st.acc && a !== st.acc)) st.acc = null;
+        }
+        if (o.r2 && last && va && st.acc && j > st.accK) {
+          const d = st.acc === 'above' ? 1 : -1, edge = d > 0 ? va.vah : va.val;
+          if (!st.r2[d] && (d > 0 ? x.l <= edge + 0.25 * atr && x.c > edge && x.c > x.o : x.h >= edge - 0.25 * atr && x.c < edge && x.c < x.o)) { st.r2[d] = true; st.sig[d] = { rule: 2, edge, ext: d > 0 ? x.l : x.h }; }
+        }
+      }
+      st.k = k;
+    }
+    const minRisk = Math.max(0.5 * atr, 8 * cost);
+    const side = d => {
+      const up = d > 0, fac = (key, label, max) => ({ key, label, max, pts: 0, detail: '' });
+      const vf = fac('zone', 'Value area', 30), af = fac('liq', 'Open and acceptance', 30), cf = fac('cisd', 'Trigger', 25), rf = fac('room', 'Room to target', 15);
+      const sg = st.sig[d]; let fire = false, why = null, lv = null, setup = `Market profile ${up ? 'long' : 'short'}`, plan = 'Previous-day value area: open outside and back inside for two 30-minute closes, or two 30-minute closes beyond value and a rejected pullback.';
+      if (!va) { why = 'No previous-day profile yet.'; vf.detail = why; }
+      else {
+        vf.pts = 30; vf.detail = `Previous-day value area ${f(va.val)} to ${f(va.vah)}, POC ${f(va.poc)}. Today opened ${st.openSide === 'inside' ? 'inside' : st.openSide === 'above' ? 'above' : 'below'} it at ${f(st.open)}.`;
+        af.detail = st.acc ? `Two 30-minute closes in a row ${st.acc} value: accepted ${st.acc}.` : st.openSide !== 'inside' ? `Opened ${st.openSide} value; waiting for two 30-minute closes back inside.` : 'Opened inside value: balanced so far, no acceptance outside yet.';
+        if (sg) {
+          const ref = b.c; let sl, risk, t1, t2;
+          if (sg.rule === 1) {
+            setup = `Market profile 80% rule ${up ? 'long' : 'short'}`;
+            const edge = up ? va.val : va.vah; sl = edge - d * 0.5 * atr; risk = d * (ref - sl); if (risk < minRisk) { sl = ref - d * minRisk; risk = minRisk; }
+            t2 = up ? va.vah : va.val; t1 = d * (va.poc - ref) > 0.3 * risk && d * (t2 - va.poc) > 0 ? va.poc : (ref + t2) / 2;
+            af.pts = 30; af.detail = `Opened ${up ? 'below' : 'above'} value, then two 30-minute closes back inside.`; cf.pts = 25; cf.detail = `Back inside value: target the other side, ${f(t2)}.`;
+          } else {
+            setup = `Market profile acceptance pullback ${up ? 'long' : 'short'}`;
+            sl = (up ? Math.min(sg.ext, sg.edge) - 0.25 * atr : Math.max(sg.ext, sg.edge) + 0.25 * atr); risk = d * (ref - sl); if (risk < minRisk) { sl = ref - d * minRisk; risk = minRisk; }
+            t1 = ref + d * 1.5 * risk; t2 = ref + d * 3 * risk;
+            af.pts = 30; af.detail = `Accepted ${up ? 'above' : 'below'} value (two 30-minute closes beyond ${f(sg.edge)}).`; cf.pts = 25; cf.detail = `Pullback to ${f(sg.edge)} rejected: closed back ${up ? 'above' : 'below'} it.`;
+          }
+          const rr1 = d * (t1 - ref) / risk, rr2 = d * (t2 - ref) / risk;
+          if (!inHours) why = null; else if (rr2 < 1.5) why = `Signal, but TP2 is only ${rr2.toFixed(1)}R away.`;
+          else { fire = true; rf.pts = 15; rf.detail = `TP1 ${f(t1)} (${rr1.toFixed(1)}R), TP2 ${f(t2)} (${rr2.toFixed(1)}R).`; lv = { ref, sl, risk, t1, t2, rr1, rr2 }; }
+        } else why = af.detail;
+      }
+      const L = lv || { ref: b.c, sl: b.c - d * atr, risk: atr, t1: b.c + d * atr, t2: b.c + d * 2 * atr, rr1: 1, rr2: 2 }, q = fire ? 70 : 40;
+      const tags = { setup: 'market profile', entry: sg ? (sg.rule === 1 ? '80% rule' : 'acceptance pullback') : '–', zone: st.openSide || '–', side: up ? 'long' : 'short', liq: '–', h1: '–', m15: '–', day: va ? (st.openSide === 'inside' ? 'balanced' : 'trend with') : '–', stacked: false, rr1: lv && lv.rr1 >= 1.5 ? '1.5R or more' : 'under 1.5R' };
+      return { tags, dir: d, factors: [vf, af, cf, rf], score: q, quality: q, grade: q >= 80 ? 'A+' : q >= 65 ? 'A' : 'B', fire, entry: L.ref, sl: L.sl, risk: L.risk, tp1: L.t1, tp1Name: 'target 1', tp2: L.t2, tp2Name: 'target 2', rr1: L.rr1, rr2: L.rr2,
+        setup, hasTrigger: !!sg, hasLocation: !!va, blocked: false, offHours: !inHours, why, plan, swept: false };
+    };
+    const long = side(1), short = side(-1);
+    let pick = null; for (const x of [long, short]) if (x.fire && (!pick || x.score > pick.score)) pick = x;
+    return { k, t: b.t, price: b.c, atr, prof: engineProfile(S, k), vw, sd, sdOk: sd > 0.25 * atr, rg: regime(S, k), long, short, pick, fm: true };
+  }
+
   function sideEval(ctx, d) {
     const { S, k, b, atr, prof, vw, sd, sdOk, rg } = ctx;
     const f = x => x.toFixed(S.dec);
@@ -1733,7 +1810,7 @@ const AF = (() => {
       if (stopHit) return finish(S, t, k, t.realized, 'TP1, rest at breakeven', t.entry);
       if (hit(t.tp2)) return finish(S, t, k, t.realized + 0.5 * R(t.tp2), 'TP2 hit', t.tp2);
     }
-    if (k - t.k >= Math.max(20, Math.round((S.params.strategy === 'frvp' || S.params.strategy === 'fm' ? 24 : 4) * 3600e3 / S.interval))) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
+    if (k - t.k >= Math.max(20, Math.round((S.params.strategy === 'frvp' || S.params.strategy === 'fm' || S.params.strategy === 'mp' ? 24 : 4) * 3600e3 / S.interval))) finish(S, t, k, t.stage ? t.realized + 0.5 * R(b.c) : R(b.c), 'Timed out', b.c);
   }
 
   function liveR(S, price) {
@@ -3552,6 +3629,13 @@ const AF = (() => {
     }
     $('#histBreak').innerHTML = `<h3 class="tl-h">What separates winners from losers</h3><p class="hintp" style="margin-bottom:8px">Each condition at the moment of the signal, with the win rate and average result of the trades that had it. Groups under 15 trades are too small to trust.</p><div class="tablewrap"><table class="bk"><thead><tr><th>Condition</th><th>Value</th><th class="num">Trades</th><th class="num">Won</th><th class="num">Avg per trade</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
   }
+  function renderBlocks(res, t0, t1, days) {
+    const box = $('#histBlocks'); if (!box) return; if (days < 180) { box.hidden = true; return; }
+    const W = (t1 - t0) / 3, lab = ['Oldest third', 'Middle third', 'Latest third'];
+    const rows = res.map(r => { const L = r[2].trades || [], bl = [0, 1, 2].map(i => L.filter(t => Math.min(2, Math.floor((t.t - t0) / W)) === i)); const cell = a => { const n = a.length, R = a.reduce((x, t) => x + t.net, 0); return `<td class="num ${R >= 0 ? 'up' : 'down'}">${n ? (R >= 0 ? '+' : '') + R.toFixed(1) + 'R' : '–'} <small>(${n} · ${n ? (R / n >= 0 ? '+' : '') + (R / n).toFixed(2) : '0'})</small></td>`; }; const all = L, R = all.reduce((x, t) => x + t.net, 0); return `<tr><td>${esc(r[0])}</td>${bl.map(cell).join('')}<td class="num ${R >= 0 ? 'up' : 'down'}">${R >= 0 ? '+' : ''}${R.toFixed(1)}R (${all.length})</td></tr>`; });
+    box.innerHTML = `<h3 class="tl-h">By third of the period</h3><p class="hintp" style="margin-bottom:8px">Net R of each version in each third of the ${days} days: total R, then (trades · average per trade). An edge should show in all three thirds, not just one.</p><div class="tablewrap"><table><thead><tr><th>Version</th>${lab.map(x => `<th class="num">${x}</th>`).join('')}<th class="num">All</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+    box.hidden = false;
+  }
   $('#pipThr').oninput = renderPips; $('#histPick').onchange = $('#histShow').onchange = () => { renderHistTrades(); renderPath(); };
   $('#histCsv').onclick = () => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
@@ -3590,10 +3674,12 @@ const AF = (() => {
           // exit test: the entry rules are this market's own settings; only the way profit is taken changes
           const o = { ...base.model, exit: 'split', tp2: 'far' };
           grid.push([`5m · half at TP1, rest to the farthest level`, tf, { ...o }]);
-          grid.push([`5m · skip trades when the day is trending against them`, tf, { ...o, dayskip: true }]);
+          grid.push([`5m · market profile: 80% rule only (open outside value, back inside for two 30m closes)`, tf, { mp: { r1: true, r2: false } }]);
+          grid.push([`5m · market profile: acceptance pullback only (two 30m closes beyond value, rejected pullback)`, tf, { mp: { r1: false, r2: true } }]);
+          grid.push([`5m · market profile: both rules`, tf, { mp: { r1: true, r2: true } }]);
         }
         histCtx = { inst, m1, base, grid };
-        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
+        for (const [name, tf, mo] of grid) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, { tf, ...m2 }, await runVariant(inst, aggregate(m1, tf), mo.mp ? { ...base, strategy: 'mp', mp: mo.mp } : mo.fm ? { ...base, strategy: 'fm', fm: mo.fm } : { ...base, model: { ...base.model, ...m2 } }, say, name, days, tf, splitT)]); }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
         if (false && classOf(inst.def) !== 'forex' && !ownFm && res.length > 1) {
@@ -3637,6 +3723,7 @@ const AF = (() => {
       histRes = res; histMarket = inst.def.label;
       $('#histPick').innerHTML = res.map(r => `<option${r === mine ? ' selected' : ''}>${esc(r[0])}</option>`).join('');
       renderHistTrades(); renderPips(); renderPath();
+      renderBlocks(res, m1[0].t, m1[m1.length - 1].t, days);
       const d1 = new Date(m1[0].t).toLocaleDateString([], { dateStyle: 'medium' }), d2 = new Date(m1[m1.length - 1].t).toLocaleDateString([], { dateStyle: 'medium' });
       say(`${inst.def.label}, ${d1} to ${d2}: ${m1.length.toLocaleString()} one-minute bars, rebuilt into each timeframe. ${base.strategy === 'frvp' ? `Strategy: your FRVP model (previous day + today profile from ${hhmm(base.model.dayStart)} UTC, CISD trigger, minimum ${base.model.minRR}R to TP2${brokerHours(inst) ? ', broker weekend skipped' : ''}).` : `Profile: FRVP ${base.frvp && base.frvp.range === 'today' ? 'today' : base.frvp && base.frvp.range === 'prev' ? 'previous session' : `rolling ${base.lookback} bars`}. Trigger: ${base.trigger === 'flow' ? 'order flow / rejection candle' : 'fractal sweep'}, threshold ${base.threshold}.`} Costs ${costPips(inst)} ${unitWord(inst.def)} per trade. Results are after costs. ${best ? `Steady means at least 30 signals and at least +0.10R per trade in both the first two-thirds and the last third: ${best[0]}.` : 'No version is steady (30+ signals and at least +0.10R per trade in both parts of the period). That means no proven edge on this market and period.'} ${inst.def.src === 'binance' ? 'The order-book factor is left out because Binance keeps no book history.' : 'No volume or order book on this market, so only structure, value, day type and price action are scored.'}`);
     } catch (ex) { say(`The history test stopped: ${ex.message}. Try a shorter period, or try again in a minute.`); }
@@ -3733,7 +3820,7 @@ const AF = (() => {
     if (v.startsWith('X:')) return { inst: null, label: v.slice(2) };
     const i = byId[v]; return { inst: i || null, label: i ? i.def.label : v };
   }
-  function rvBrief(pk) {
+  function rvBrief(pk, forApi) {
     const inst = pk.inst, d = inst ? inst.def : { id: pk.label, label: pk.label }, S_ = inst && cfg.enabled[d.id] ? inst.S : null, e = S_ && S_.lastEval, off = cfg.offsets[d.id] || 0, dec = S_ ? S_.dec : 2;
     const P = x => (x == null || !isFinite(x)) ? '–' : (x + off).toFixed(dec), L = [], now = new Date();
     const stratV = $('#rvStrat').value;
@@ -3775,13 +3862,15 @@ const AF = (() => {
     if (closed.length) { L.push(''); L.push(`LAST CLOSED ${d.label} SIGNALS`); closed.forEach(t => L.push(`- ${t.dir > 0 ? 'BUY' : 'SELL'} ${t.setup}: ${t.status}, ${t.result >= 0 ? '+' : ''}${t.result.toFixed(2)}R`)); }
     const note = $('#rvNote').value.trim(); if (note) { L.push(''); L.push('TRADER NOTES: ' + note); }
     L.push('');
-    L.push('PLEASE RETURN');
-    L.push('1. What you see on each chart (daily, 4H, 15m) and where the trader\'s tools place value, liquidity and bias.');
-    L.push('2. A verdict: BUY, SELL or NO TRADE now, with the reasons and the conditions that would change it.');
-    L.push('3. If a trade: the entry trigger on the 5-minute or 1-minute chart, stop, TP1, TP2, and the reward to risk.');
-    L.push('4. Whether you agree with the engine\'s read and each running trade above, and where the two differ.');
-    L.push('5. What would invalidate the idea.');
-    L.push('Context: the engine\'s rules are unproven. A 270-day gold backtest was close to flat after costs, so treat the engine read as one input, not as truth. Answer from the charts first.');
+    if (!forApi) {
+      L.push('PLEASE RETURN');
+      L.push('1. What you see on each chart (daily, 4H, 15m) and where the trader\'s tools place value, liquidity and bias.');
+      L.push('2. A verdict: BUY, SELL or NO TRADE now, with the reasons and the conditions that would change it.');
+      L.push('3. If a trade: the entry trigger on the 5-minute or 1-minute chart, stop, TP1, TP2, and the reward to risk.');
+      L.push('4. Whether you agree with the engine\'s read and each running trade above, and where the two differ.');
+      L.push('5. What would invalidate the idea.');
+      L.push('Context: the engine\'s rules are unproven. A 270-day gold backtest was close to flat after costs, so treat the engine read as one input, not as truth. Answer from the charts first.');
+    }
     return L.join('\n');
   }
   async function rvBuild() {
@@ -3800,10 +3889,133 @@ const AF = (() => {
   }
   const rvOut = { url: '', name: '' };
   $('#rvBuild').onclick = rvBuild; $('#rvMarket').onchange = () => { $('#rvCustom').hidden = $('#rvMarket').value !== 'CUSTOM'; };
-  $('#reviewBtn').onclick = () => { const s = $('#reviewPanel'); s.hidden = !s.hidden; $('#reviewBtn').setAttribute('aria-expanded', !s.hidden); if (!s.hidden) { rvInit(); rvMarkets(); s.scrollIntoView({ block: 'nearest' }); } };
+  $('#reviewBtn').onclick = () => { const s = $('#reviewPanel'); s.hidden = !s.hidden; $('#reviewBtn').setAttribute('aria-expanded', !s.hidden); if (!s.hidden) { rvInit(); rvMarkets(); rvKeyUi(); s.scrollIntoView({ block: 'nearest' }); } };
   $('#rvClear').onclick = () => { for (const k of Object.keys(rvImgs)) delete rvImgs[k]; RV_SLOTS.forEach(([k]) => rvSlotShow(k)); $('#rvOut').hidden = true; $('#rvMsg').textContent = ''; };
   $('#rvDl').onclick = () => { if (!rvOut.url) return; const a = document.createElement('a'); a.href = rvOut.url; a.download = rvOut.name; document.body.appendChild(a); a.click(); a.remove(); };
   $('#rvCopy').onclick = async () => { const t = $('#rvBrief'); try { await navigator.clipboard.writeText(t.value); $('#rvMsg').textContent = 'Brief copied.'; } catch (e) { t.select(); document.execCommand('copy'); $('#rvMsg').textContent = 'Brief copied.'; } };
+  // ---- Chart review, analysed inside the app by a vision model (needs the user's own API key; the key stays in this browser) ----
+  const RV_MODEL = 'claude-sonnet-5-5';
+  const RV_SYSTEM = `You are the chart-review engine inside the trader's app "Aurum Flow". The trader sends marked-up screenshots (daily, 4H, 15m, sometimes 5m/1m) and a brief with live engine data. Read the screenshots yourself: prices, candles, and the tools drawn on them. Then apply the trader's own strategies below, choosing whichever matches what is drawn and what the market is doing. If the trader forced a strategy, use only that one. Say plainly when no strategy gives a valid setup.
+
+THE TRADER'S STRATEGIES
+1. FRVP model (fixed range volume profile). Profile spans the previous day plus today (day starts 22:00 UTC). Zones: POC, high-volume nodes (HVN, support or resistance), VAL, VAH. A valid setup needs: price at a zone; liquidity taken first (previous day high or low, or the last 1H high or low) and price closed back past it; a CISD (close back through the open of the last opposing run of candles) on the entry timeframe (5m, or 1m); then a retest of the zone that holds (rejection without a new extreme beyond the sweep); order-flow delta agreeing when volume exists. No trades when price is chopping through the POC. Stop beyond the sweep extreme. TP1 is the next key level at least 1R away; TP2 is the farthest key level; the minimum reward to TP2 is 2.5R. Half is taken at TP1 and the stop moves to breakeven. Time stop 24 hours.
+2. Fractal model. On the 1H (or 4H), candle 2 takes candle 1's high (or low) and closes back inside candle 1's range. That sets the side (short after a high is taken, long after a low is taken). Entry on a CISD on the lower timeframe inside or after candle 2. Target is the other end of candle 1. The setup fails if price trades beyond candle 2's extreme.
+3. VWAP. Session VWAP as the mean and bias. It is strongest when it sits on a zone of the FRVP model (confluence). Fade stretched moves back to VWAP only on balanced days; do not fade a strong trend day.
+Also relevant: day type (balanced or trending), top-down structure (4H, 1H, 15m), and the engine's own read in the brief.
+
+HONESTY RULES
+- The engine's rules are unproven. A 270-day gold backtest was about flat after costs, so never present a setup as high-probability just because the rules line up. Confidence can be at most "medium" unless several independent things agree.
+- Deriv synthetic indices and forex have no real traded volume, so volume-profile levels there are weak evidence. Say so for those markets.
+- Read prices from the axis labels and say they are approximate. Never invent a level that is not visible or in the brief.
+- If the screenshots are missing, blurry or cut off, say which and lower confidence.
+- Compare with the engine's read and every running trade listed in the brief, and say where you agree or differ.
+
+OUTPUT: reply with ONE JSON object only, no markdown, with exactly these keys:
+{"strategy_used":"FRVP model | Fractal model | VWAP | FRVP + VWAP | none","why_strategy":"one sentence","verdict":"BUY | SELL | NO_TRADE | WAIT_FOR_RETEST","summary":"two sentences","charts":{"daily":"what you see","h4":"what you see","m15":"what you see, including the tools","lower":"5m or 1m if given, else empty string"},"reasons":["short reason", "..."],"plan":{"trigger_tf":"5m or 1m","trigger":"the exact entry trigger to wait for","entry":number or null,"stop":number or null,"tp1":number or null,"tp2":number or null},"engine_view":"agree or differ with the engine and why","running_trades":"comment on each running trade in the brief, or none","invalidation":"what cancels the idea","confidence":"low | medium | high","caveats":["short caveat"]}
+For WAIT_FOR_RETEST give the retest level as entry. For NO_TRADE set the plan numbers to null.`;
+  function rvKey() { return LS.get('rvKey', ''); }
+  function rvKeyUi() { const k = rvKey(); $('#rvKeyIn').value = ''; $('#rvKeyState').textContent = k ? `Key saved in this browser (ends ${k.slice(-4)}).` : 'No key saved yet.'; $('#rvAi').disabled = false; }
+  const rvNum = x => (typeof x === 'number' && isFinite(x)) ? x : (x != null && x !== '' && isFinite(+x) ? +x : null);
+  function rvRender(j, pk) {
+    const d = pk.inst ? pk.inst.S && pk.inst.S.dec : 2, f = x => { x = rvNum(x); return x == null ? '–' : x.toFixed(Math.abs(x) >= 1000 ? 2 : (d || 4)); };
+    const v = String(j.verdict || '').replace(/_/g, ' '), cls = /BUY/.test(v) ? 'up' : /SELL/.test(v) ? 'down' : '';
+    const p = j.plan || {}, en = rvNum(p.entry), sl = rvNum(p.stop), t1 = rvNum(p.tp1), t2 = rvNum(p.tp2);
+    let rr = '';
+    if (en != null && sl != null && Math.abs(en - sl) > 0) { const r = Math.abs(en - sl), r1 = t1 != null ? Math.abs(t1 - en) / r : null, r2 = t2 != null ? Math.abs(t2 - en) / r : null; rr = `Risk ${r.toFixed(Math.abs(en) >= 1000 ? 1 : 4)}${r1 != null ? `, TP1 ${r1.toFixed(1)}R` : ''}${r2 != null ? `, TP2 ${r2.toFixed(1)}R` : ''}.${r2 != null && r2 < 2.5 ? ' <b class="down">Below your 2.5R minimum to TP2.</b>' : ''}`; }
+    const li = a => Array.isArray(a) && a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+    const ch = j.charts || {};
+    $('#rvResult').innerHTML = `<h3 class="tl-h">${esc(pk.label)} · <span class="${cls}">${esc(v || '–')}</span> · ${esc(j.confidence || '')} confidence</h3>
+      <p><b>Strategy used:</b> ${esc(j.strategy_used || '–')}. ${esc(j.why_strategy || '')}</p><p>${esc(j.summary || '')}</p>
+      <h4>What it sees</h4><ul>${[['Daily', ch.daily], ['4H', ch.h4], ['15m', ch.m15], ['5m / 1m', ch.lower]].filter(x => x[1]).map(x => `<li><b>${x[0]}:</b> ${esc(x[1])}</li>`).join('')}</ul>
+      <h4>Reasons</h4>${li(j.reasons)}
+      <h4>Plan</h4><p>${esc(p.trigger_tf || '')} trigger: ${esc(p.trigger || '–')}</p><p>Entry ${f(en)} · Stop ${f(sl)} · TP1 ${f(t1)} · TP2 ${f(t2)}<br>${rr}</p>
+      <h4>Against the engine</h4><p>${esc(j.engine_view || '–')}</p><p>${esc(j.running_trades || '')}</p>
+      <h4>Invalidation</h4><p>${esc(j.invalidation || '–')}</p>${j.caveats && j.caveats.length ? '<h4>Caveats</h4>' + li(j.caveats) : ''}
+      <p class="hintp">Read by ${RV_MODEL} from your screenshots. Prices are read off the charts, so check them against your broker before placing anything. This is not financial advice, and the strategies are unproven.</p>`;
+    $('#rvResult').hidden = false;
+  }
+  async function rvAnalyse() {
+    const pk = rvPick(), msg = $('#rvMsg'), key = rvKey(), keys = RV_SLOTS.map(x => x[0]).filter(k => rvImgs[k]);
+    if (!key) { msg.textContent = 'Paste your Anthropic API key above and press Save key first.'; return; }
+    if (!keys.length) { msg.textContent = 'Add at least one chart screenshot first.'; return; }
+    msg.textContent = 'Analysing… this usually takes 20 to 60 seconds.'; $('#rvAi').disabled = true; $('#rvResult').hidden = true;
+    try {
+      const content = []; for (const k of keys) { content.push({ type: 'text', text: `Chart: ${RV_SLOTS.find(x => x[0] === k)[1].replace(' (optional)', '')}` }); content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: rvImgs[k].split(',')[1] } }); }
+      content.push({ type: 'text', text: rvBrief(pk, true) });
+      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 120000);
+      const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: RV_MODEL, max_tokens: 2200, system: RV_SYSTEM, messages: [{ role: 'user', content }] }) });
+      clearTimeout(to); const j = await r.json().catch(() => ({}));
+      if (!r.ok) { msg.textContent = r.status === 401 ? 'The API key was rejected. Check it and save it again.' : r.status === 429 ? 'Rate limit or no credit on this key. Wait a minute or check your API balance.' : `The API returned an error (${r.status}): ${(j.error && j.error.message) || 'unknown'}`; return; }
+      const txt = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), a = txt.indexOf('{'), b = txt.lastIndexOf('}');
+      if (a < 0 || b < a) { msg.textContent = 'The reply could not be read as an analysis. Try again.'; return; }
+      rvRender(JSON.parse(txt.slice(a, b + 1)), pk); msg.textContent = 'Done.';
+    } catch (e) { msg.textContent = e && e.name === 'AbortError' ? 'The request took too long. Try again.' : 'The analysis failed: ' + (e && e.message ? e.message : 'network error') + '. Check your connection and key.'; }
+    finally { $('#rvAi').disabled = false; }
+  }
+  $('#rvKeySave').onclick = () => { const v = $('#rvKeyIn').value.trim(); if (v) LS.set('rvKey', v); rvKeyUi(); };
+  $('#rvKeyClear').onclick = () => { LS.set('rvKey', ''); rvKeyUi(); };
+  $('#rvAi').onclick = rvAnalyse;
+  // ---- Chart review, free version: run the trader's own strategies on the live candles (no screenshot, no AI, no key) ----
+  async function rvDataRun() {
+    const pk = rvPick(), msg = $('#rvMsg'), inst = pk.inst, out = $('#rvData');
+    if (!inst || !cfg.enabled[inst.def.id] || !inst.S || !inst.S.cur) { msg.textContent = `${pk.label} has no live data in the app. Turn the market on in the market strip, or use the screenshot review.`; return; }
+    msg.textContent = 'Reading the candles…'; $('#rvDataBtn').disabled = true; out.hidden = true;
+    try {
+      const m1 = (await historyBars(inst, 6, t => { msg.textContent = t; })).filter(b => tradeable(inst, b.t));
+      if (m1.length < 600) throw new Error('not enough recent candles came back');
+      const base = { ...inst.S.params }; readParams(base, inst); const own = base.strategy === 'fm' ? { ...base } : { ...base };
+      const frvp = { ...base, strategy: 'frvp' }, mdl = o => ({ ...frvp, model: { ...frvp.model, ...o } });
+      const V = [
+        ['Your live settings for this market', own],
+        ['FRVP: sweep + CISD, no retest', mdl({ sweep: true, delta: false, align: false, confirm: false })],
+        ['FRVP: retest + delta (gold live)', mdl({ sweep: true, delta: true, confirm: true })],
+        ['Fractal model: 1H candle 2 sweep + CISD', { ...base, strategy: 'fm', fm: {} }]
+      ];
+      const bars = aggregate(m1, 5), res = [];
+      for (const [name, params] of V) {
+        const T = AF.createStore({ mode: inst.def.src === 'binance' ? 'live' : 'tick', hasBook: inst.def.src === 'binance', hasFlow: inst.def.src === 'binance', symbol: inst.def.label, bin: inst.S.BIN, pip: inst.S.pip, dec: inst.S.dec, interval: 5 * 60000, htfMult: HTF_MULT[5] });
+        Object.assign(T.params, params);
+        for (let i = 0; i < bars.length; i++) AF.closeBar(T, bars[i]);
+        const last = T.bars.length - 1, a = T.active, fresh = a && last - a.k <= 3, e = T.lastEval;
+        res.push({ name, T, e, a: fresh ? a : null, old: a && !fresh ? a : null });
+      }
+      rvDataRender(pk, inst, res, m1);
+      msg.textContent = 'Done. This is your rules applied to the last few days of candles, with no AI involved.';
+    } catch (e) { msg.textContent = 'The analysis failed: ' + (e && e.message ? e.message : 'unknown error'); }
+    finally { $('#rvDataBtn').disabled = false; }
+  }
+  function rvDataRender(pk, inst, res, m1) {
+    const dec = inst.S.dec, off = cfg.offsets[inst.def.id] || 0, P = x => (x == null || !isFinite(x)) ? '–' : (x + off).toFixed(dec), pip = inst.def.rng ? 1 : inst.S.pip, px = inst.S.cur.c;
+    const fired = res.filter(r => r.a), sides = new Set(fired.map(r => r.a.dir));
+    const verdict = !fired.length ? 'WAIT' : sides.size > 1 ? 'NO TRADE (strategies disagree)' : (fired[0].a.dir > 0 ? 'BUY' : 'SELL');
+    const cls = verdict === 'BUY' ? 'up' : verdict === 'SELL' ? 'down' : '';
+    // daily candles from the broker day start (22:00 UTC)
+    const DAY = 86400e3, OFF = 22 * 3600e3, days = new Map();
+    for (const b of m1) { const k = Math.floor((b.t - OFF) / DAY); const c = days.get(k); if (!c) days.set(k, { o: b.o, h: b.h, l: b.l, c: b.c }); else { c.h = Math.max(c.h, b.h); c.l = Math.min(c.l, b.l); c.c = b.c; } }
+    const dk = [...days.keys()].sort((x, y) => x - y), dl = dk.map(k => days.get(k)), today = dl[dl.length - 1], prev = dl[dl.length - 2];
+    const hh = dl.slice(-4), up = hh.length >= 3 && hh.every((c, i) => i === 0 || (c.h > hh[i - 1].h && c.l > hh[i - 1].l)), dn = hh.length >= 3 && hh.every((c, i) => i === 0 || (c.h < hh[i - 1].h && c.l < hh[i - 1].l));
+    const daily = prev ? `Previous day ${prev.c >= prev.o ? 'closed up' : 'closed down'} (high ${P(prev.h)}, low ${P(prev.l)}). Today so far: ${P(today.o)} to ${P(px)}, range ${P(today.l)}–${P(today.h)}. Last ${hh.length} days: ${up ? 'higher highs and higher lows (up)' : dn ? 'lower highs and lower lows (down)' : 'no clean sequence (mixed or ranging)'}.` : 'Not enough days of candles.';
+    const e0 = res[0].e || {}, struct = e0.s240 != null ? `4H ${e0.s240}, 1H ${e0.s60}, 15m ${e0.s15}. ${e0.tdText || ''}` : '';
+    const prof = e0.prof ? `POC ${P(e0.prof.poc)}, VAH ${P(e0.prof.vah)}, VAL ${P(e0.prof.val)}${e0.prof.zones && e0.prof.zones.length ? ', HVN ' + e0.prof.zones.slice(0, 4).map(z => P(z.price)).join(' / ') : ''}; VWAP ${P(e0.vw)}. Price is ${px > e0.prof.vah ? 'above' : px < e0.prof.val ? 'below' : 'inside'} value${e0.rg ? ', day type ' + (e0.rg.kind === 'balance' ? 'balanced' : e0.rg.kind) : ''}.` : '';
+    const row = r => {
+      const a = r.a, e = r.e;
+      if (a) { const risk = Math.abs(a.entry - a.sl0), rr2 = Math.abs(a.tp2 - a.entry) / risk, rr1 = Math.abs(a.tp1 - a.entry) / risk; return `<tr><td>${esc(r.name)}</td><td><b class="${a.dir > 0 ? 'up' : 'down'}">${a.dir > 0 ? 'BUY' : 'SELL'}</b></td><td>${esc(a.setup)}. Entry ${P(a.entry)}, stop ${P(a.sl0)}, TP1 ${P(a.tp1)} (${rr1.toFixed(1)}R), TP2 ${P(a.tp2)} (${rr2.toFixed(1)}R). Opened ${new Date(a.t + 5 * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}.</td></tr>`; }
+      const side = (nm, sd) => { if (!sd) return ''; const miss = (sd.factors || []).filter(f => !f.na && f.pts === 0 && ['zone', 'liq', 'cisd', 'confirm'].includes(f.key)).map(f => String(f.detail || '').replace(/\s+/g, ' ')); const t = sd.why ? String(sd.why).replace(/\s+/g, ' ') : miss.join(' '); return t ? `<b>${nm}:</b> ${esc(t)}` : ''; };
+      const w = e ? [side('Long', e.long), side('Short', e.short)].filter(Boolean).join('<br>') : '';
+      return `<tr><td>${esc(r.name)}</td><td>No signal</td><td>${w || esc(r.old ? 'A trade from earlier is still running.' : 'Nothing on the last closed 5m bar.')}</td></tr>`;
+    };
+    const open = ledger.filter(t => t.result === null), line = t => { const i = byId[t.mk], q = i && i.S && i.S.cur ? i.S.cur.c : t.entry, r = signalR(t, q), o = t.offset != null ? t.offset : (cfg.offsets[t.mk] || 0), f = x => (x + o).toFixed(t.dec); return `<li>${esc(t.label)} ${t.dir > 0 ? 'BUY' : 'SELL'} (${esc(t.setup)}): entry ${f(t.entry)}, stop ${f(t.sl)}, TP1 ${f(t.tp1)}, TP2 ${f(t.tp2)}; now ${r >= 0 ? '+' : ''}${r.toFixed(2)}R</li>`; };
+    const pick = fired[0] && fired[0].a;
+    const plan = pick && sides.size === 1 ? `<h4>Plan</h4><p>${pick.dir > 0 ? 'Buy' : 'Sell'} from ${P(pick.entry)}, stop ${P(pick.sl0)} (${(Math.abs(pick.entry - pick.sl0) / pip).toFixed(0)} pips), TP1 ${P(pick.tp1)} ${esc(pick.tp1Name || '')}, TP2 ${P(pick.tp2)} ${esc(pick.tp2Name || '')}. Take half at TP1, then move the stop to breakeven.</p>${pick.narrative ? `<p>${esc(pick.narrative)}</p>` : ''}` : '';
+    $('#rvData').innerHTML = `<h3 class="tl-h">${esc(pk.label)} · <span class="${cls}">${esc(verdict)}</span> · from live candles</h3>
+      <p>${fired.length ? `${fired.length} of ${res.length} strategy runs have a live signal.` : 'None of the strategy runs has a signal on the last closed 5m bar.'} ${sides.size > 1 ? 'They point in opposite directions, so stand aside.' : ''}</p>
+      <h4>Higher timeframes</h4><p>${esc(daily)}</p>${struct ? `<p>${esc(struct)}</p>` : ''}${prof ? `<p>${esc(prof)}</p>` : ''}
+      <h4>Each strategy on the last few days</h4><div class="tablewrap"><table><thead><tr><th>Strategy</th><th>Now</th><th>Detail</th></tr></thead><tbody>${res.map(row).join('')}</tbody></table></div>${plan}
+      <h4>Running trades in the engine (${open.length})</h4>${open.length ? `<ul>${open.map(line).join('')}</ul>` : '<p>None.</p>'}
+      <p class="hintp">Rule-based, no AI: your strategies applied to the last 6 days of ${esc(inst.def.label)} candles, as of the last closed 5m bar. It cannot read hand-drawn marks. The rules are unproven: a 270-day gold backtest was about flat after costs. Forex and synthetics have no real volume, so volume levels there are weak. Check the levels against your broker, and demo first.</p>`;
+    $('#rvData').hidden = false;
+  }
+  $('#rvDataBtn').onclick = rvDataRun;
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t));
     $('#pane-journal').hidden = t.dataset.tab !== 'journal'; $('#pane-rules').hidden = t.dataset.tab !== 'rules'; $('#pane-hist').hidden = t.dataset.tab !== 'hist';
