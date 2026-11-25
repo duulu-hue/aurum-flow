@@ -3697,9 +3697,9 @@ const AF = (() => {
         }
         // auto: every week, look back at what each version earned on trades that had already closed, and trade the
         // best one for the coming week. Only past results are used, so this is a fair (walk-forward) test.
-        if (false && classOf(inst.def) !== 'forex' && !ownFm && res.length > 1) {
-          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.filter(r => !r[1].bkd && !r[1].auto);
-          for (const [lbDays, aside] of [[7, false], [14, false], [21, false], [30, false]]) {
+        if (classOf(inst.def) !== 'forex' && classOf(inst.def) !== 'crypto' && !ownFm && res.length > 1) {
+          const W = 7 * 86400e3, t0 = m1[0].t, t1 = m1[m1.length - 1].t, playbook = res.filter(r => !r[1].auto && !/portfolio|80% rule|both rules/.test(r[0]));
+          for (const [lbDays, aside] of [[21, false], [45, false], [21, true], [45, true]]) {
             const LB = lbDays * 86400e3, list = [], used = {};
             for (let w = t0; w < t1; w += W) {
               let pick = playbook[0], best = null;
@@ -3716,7 +3716,7 @@ const AF = (() => {
               if (pick) for (const t of pick[2].trades) if (t.t >= w && t.t < w + W) list.push({ ...t, setup: `${t.setup} (auto: ${nm})` });
             }
             const s = summarize(list.map(t => ({ t: t.t, dir: t.dir, net: t.net })), days, splitT); s.trades = list;
-            const name = `5m · AUTO (test): best exit of the last ${lbDays} days, chosen weekly${aside ? ', stands aside if none made money' : ''}`;
+            const name = `5m · AUTO (walk-forward): best rule of the last ${lbDays} days, picked weekly${aside ? ', stands aside if none made money' : ''}`;
             s.autoUsed = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v} wk`).join(', ');
             res.push([name, { tf: 5, auto: true }, s]);
           }
