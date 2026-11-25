@@ -458,6 +458,7 @@ tr.open td{background:var(--gold-soft)}
   </div>
   <div class="pane" id="pane-hist" hidden>
     <p class="hintp" style="margin-bottom:12px">Market: <b id="histTitle">XAUUSD</b>. Runs the engine on this market's past 1-minute bars, rebuilt into 1, 3, 5 and 15-minute entries, each with the day-type filter on and off, using your threshold, lookback and costs. For Binance metals it uses real buyer and seller volume. The order-book factor is left out because books have no history; the live journal measures that part. Pick another market in the strip above to test it.</p>
+    <div class="card" style="margin-bottom:14px;padding:14px"><h3 class="tl-h" style="margin-top:0">Shadow test: gold, forward only</h3><p class="hintp" style="margin-bottom:8px">Runs the walk-forward AUTO picker (five rules, best of the last 21 days chosen each week) from a start date that is saved and never moves. No money is traded. It records what AUTO would have signalled. Judge it after 30 closed trades: at least +0.10R per trade and positive net. Press Update each time you open the app.</p><div class="frow" style="margin-bottom:8px"><button class="btn" id="shStart" type="button">Start shadow test</button><button class="btn primary" id="shUpdate" type="button">Update shadow test</button></div><p class="hintp" id="shMsg"></p><div id="shadowBox"></div></div>
     <div class="frow" style="margin-bottom:10px"><label for="histDays">Period</label><select id="histDays"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="270">All 270 days (3 blocks of 90)</option><option value="450">All 450 days (5 blocks of 90, needs a long download)</option><option value="p90">Previous 90 days (days 91–180 back)</option><option value="p180">Oldest 90 days (days 181–270 back, untouched so far)</option></select><button class="btn primary" id="histRun" type="button">Run history test</button></div>
     <p class="hintp" id="histMsg" style="margin-bottom:12px">Takes about one to three minutes. The live feed keeps running meanwhile.</p>
     <div class="tablewrap"><table id="histTable" hidden><thead><tr><th>Version</th><th class="num">Signals</th><th class="num">Per day</th><th class="num">Win rate</th><th class="num">Avg per trade</th><th class="num">Net</th><th class="num">Profit factor</th><th class="num">Max drawdown</th><th class="num">Longs</th><th class="num">Shorts</th><th class="num">First 2/3</th><th class="num">Last 1/3</th></tr></thead><tbody id="histBody"></tbody></table></div>
@@ -3567,6 +3568,7 @@ const AF = (() => {
     s.trades = closed.map(t => ({ t: t.t + T.interval, exitT: t.exitIdx != null && T.bars[t.exitIdx] ? T.bars[t.exitIdx].t + T.interval : null, dir: t.dir, setup: t.setup,
       entry: t.entry, sl: t.sl0, tp1: t.tp1, tp2: t.tp2, tp1Name: t.tp1Name, tp2Name: t.tp2Name, risk: t.risk, net: t.result - params.costPrice / t.risk, status: t.status,
       zone: [fd(t, 'zone'), fd(t, 'align'), fd(t, 'confirm')].filter(Boolean).join(' '), liq: fd(t, 'liq'), q: t.score, tags: t.tags, dec: T.dec, pip: T.pip }));
+    s.openList = T.trades.filter(t => t.result === null).map(t => ({ t: t.t + T.interval, dir: t.dir, setup: t.setup, entry: t.entry, sl: t.sl0, tp1: t.tp1, tp2: t.tp2, dec: T.dec }));
     return s;
   }
   // ---- trade list for one tested version, so a trader can review each signal on their own chart
@@ -3644,6 +3646,79 @@ const AF = (() => {
     box.innerHTML = `<h3 class="tl-h">${N === 3 ? 'By third of the period' : 'By block of 90 days'}</h3><p class="hintp" style="margin-bottom:8px">Net R of each version in each block of the ${days} days: total R, then (trades · average per trade). An edge should show in every block, not just one.</p><div class="tablewrap"><table><thead><tr><th>Version</th>${lab.map(x => `<th class="num">${x}</th>`).join('')}<th class="num">All</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
     box.hidden = false;
   }
+  // ---- forward shadow test (gold): the walk-forward AUTO picker, recorded from a frozen start date, no money
+  const SH = { get: () => LS.get('shadow-xau', null), set: v => LS.set('shadow-xau', v) };
+  const WK7 = 7 * 86400e3, wkStart = t => t - ((((t - 4 * 86400e3) % WK7) + WK7) % WK7);
+  const shSay = m => { const e = $('#shMsg'); if (e) e.textContent = m; };
+  function shadowRender() {
+    const box = $('#shadowBox'); if (!box) return; const S0 = SH.get();
+    if (!S0) { box.innerHTML = '<p class="hintp">Not started. Press Start on XAUUSD. The start time is saved on this device and never moves.</p>'; return; }
+    const cl = S0.trades.filter(t => t.net != null), op = S0.trades.filter(t => t.net == null), n = cl.length, R = cl.reduce((a, t) => a + t.net, 0), w = cl.filter(t => t.net > 0.05).length;
+    const days = Math.max(0, (S0.upd || S0.start) - S0.start) / 86400e3, avg = n ? R / n : 0;
+    const verdict = n < 30 ? `Too early to judge: ${n} closed trades so far. At about 0.5 trades a day, expect 30 in roughly two months. Check again then.` : (avg >= 0.1 && R > 0 ? `Passes so far: ${n} trades at ${avg >= 0 ? '+' : ''}${avg.toFixed(2)}R each. Keep running before risking money.` : `Fails: ${n} trades at ${avg >= 0 ? '+' : ''}${avg.toFixed(2)}R each. The backtest edge did not carry forward.`);
+    const f = (t, x) => (+x).toFixed(t.dec || 2), col = v => v >= 0 ? 'up' : 'down';
+    const rows = S0.trades.slice().sort((a, b) => b.t - a.t).map(t => `<tr><td class="num">${localTime(t.t)}</td><td class="${t.dir > 0 ? 'up' : 'down'}">${t.dir > 0 ? 'BUY' : 'SELL'}</td><td>${esc(t.rule)}</td><td class="num">${f(t, t.entry)}</td><td class="num">${f(t, t.sl)}</td><td class="num">${f(t, t.tp1)}</td><td class="num">${f(t, t.tp2)}</td><td class="num ${t.net == null ? '' : col(t.net)}">${t.net == null ? 'open' : (t.net >= 0 ? '+' : '') + t.net.toFixed(2) + 'R'}</td></tr>`).join('');
+    const picks = (S0.picks || []).slice(-8).reverse().map(p => `${new Date(p.w).toLocaleDateString([], { day: '2-digit', month: 'short' })}: ${esc(p.name)}`).join(' · ');
+    box.innerHTML = `<p class="hintp"><b>Started ${new Date(S0.start).toLocaleString()}</b> · running ${days.toFixed(1)} days · last updated ${S0.upd ? new Date(S0.upd).toLocaleString() : 'never'}.</p>
+      <div class="tablewrap"><table><thead><tr><th class="num">Closed</th><th class="num">Won</th><th class="num">Net</th><th class="num">Avg per trade</th><th class="num">Open now</th><th class="num">Your settings alone (same period)</th></tr></thead><tbody><tr><td class="num">${n}</td><td class="num">${w}</td><td class="num ${col(R)}">${R >= 0 ? '+' : ''}${R.toFixed(1)}R</td><td class="num ${col(avg)}">${n ? (avg >= 0 ? '+' : '') + avg.toFixed(2) + 'R' : '–'}</td><td class="num">${op.length}</td><td class="num">${S0.ref != null ? (S0.ref >= 0 ? '+' : '') + S0.ref.toFixed(1) + 'R' : '–'}</td></tr></tbody></table></div>
+      <p class="hintp" style="margin:8px 0"><b>${esc(verdict)}</b></p>
+      <p class="hintp">Weekly picks (best rule of the last 21 days, chosen from closed trades only): ${picks || 'none yet'}.</p>
+      ${S0.trades.length ? `<div class="tablewrap"><table><thead><tr><th>Signal time</th><th>Side</th><th>Rule picked that week</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">TP1</th><th class="num">TP2</th><th class="num">Result</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
+  }
+  let shBusy = false;
+  const goldInst = () => insts.find(i => i.def.label === 'XAUUSD' && i.def.src === 'binance') || insts.find(i => i.def.label === 'XAUUSD');
+  $('#shStart').onclick = () => {
+    const g = goldInst(); if (!g) { shSay('XAUUSD is not available.'); return; }
+    if (SH.get()) { shSay('Already started. The start date is fixed so the test stays honest.'); return; }
+    SH.set({ start: Date.now() + (g.clockOff || 0), trades: [], picks: [], upd: 0, ref: null }); shSay('Started. Press Update whenever you open the app.'); shadowRender();
+  };
+  async function shRun(auto) {
+    const S0 = SH.get(); if (!S0) { shSay('Press Start first.'); return; } if (shBusy || !live) return;
+    shBusy = true; $('#shUpdate').disabled = true; const inst = goldInst(); if (!inst || !inst.S) { shBusy = false; $('#shUpdate').disabled = false; return; }
+    try {
+      const now = Date.now() + inst.clockOff, days = Math.ceil((now - S0.start) / 86400e3) + 70;
+      const m1 = (await historyBars(inst, days, shSay)).filter(b => tradeable(inst, b.t)); if (m1.length < 500) throw new Error('not enough history came back');
+      const base = { ...inst.S.params }; readParams(base, inst); base.strategy = 'frvp';
+      const o = { ...base.model, exit: 'split', tp2: 'far' };
+      const R5 = [['your settings', { ...o }], ['POC first visit', { ...o, fresh: true }], ['first-visit POC + VWAP', { ...o, fresh: true, vwz: 'poc' }], ['break and retest', { ...o, bkd: 'tight' }], ['acceptance pullback', { mp: { r1: false, r2: true } }]];
+      const bars = aggregate(m1, 5), splitT = m1[m1.length - 1].t, res = [];
+      for (const [name, mo] of R5) { const m2 = { exit: 'split', noPoc: false, bias: false, htf: '', cont: false, free: false, tp2: 'far', oneTry: false, win: '', ob: '', obz: '', mtfLvl: '', base: false, vwz: '', bkd: '', ...mo }; res.push([name, await runVariant(inst, bars, mo.mp ? { ...base, strategy: 'mp', mp: mo.mp } : { ...base, model: { ...base.model, ...m2 } }, shSay, name, days, 5, splitT)]); }
+      const LB = 21 * 86400e3, picks = [], found = {};
+      for (let w = wkStart(S0.start); w < now; w += WK7) {
+        let pick = res[0], best = null;
+        for (const r of res) { const past = r[1].trades.filter(t => t.exitT != null && t.exitT < w && t.exitT >= w - LB); if (past.length < 4) continue; const sc = past.reduce((a, t) => a + t.net, 0); if (best === null || sc > best) { best = sc; pick = r; } }
+        picks.push({ w, name: pick[0] });
+        const inWk = t => t.t >= Math.max(w, S0.start) && t.t < w + WK7;
+        for (const t of pick[1].trades) if (inWk(t)) found[t.t + '|' + t.dir] = { t: t.t, dir: t.dir, rule: pick[0], setup: t.setup, entry: t.entry, sl: t.sl, tp1: t.tp1, tp2: t.tp2, net: t.net, exitT: t.exitT, dec: t.dec };
+        for (const t of pick[1].openList || []) if (inWk(t)) found[t.t + '|' + t.dir] = { t: t.t, dir: t.dir, rule: pick[0], setup: t.setup, entry: t.entry, sl: t.sl, tp1: t.tp1, tp2: t.tp2, net: null, exitT: null, dec: t.dec };
+      }
+      const prev = {}; for (const t of S0.trades) prev[t.t + '|' + t.dir] = t;
+      const keep = {}; for (const t of S0.trades) if (t.net != null) keep[t.t + '|' + t.dir] = t;   // a closed result is never rewritten
+      for (const [k, t] of Object.entries(found)) if (!keep[k]) { keep[k] = t; if (prev[k]) { t.sentOpen = prev[k].sentOpen; t.sentClose = prev[k].sentClose; } }
+      S0.trades = Object.values(keep).sort((a, b) => a.t - b.t); S0.picks = picks; S0.upd = now; S0.updBar = Math.floor(now / 300000);
+      // Telegram: a new signal is sent while it is still fresh (under 2 hours old); older ones are only recorded
+      const fx = (t, x) => (+x).toFixed(t.dec || 2), money = [];
+      for (const t of S0.trades) {
+        const side = t.dir > 0 ? 'BUY' : 'SELL', risk = Math.abs(t.entry - t.sl), rr1 = risk ? Math.abs(t.tp1 - t.entry) / risk : 0, rr2 = risk ? Math.abs(t.tp2 - t.entry) / risk : 0;
+        if (!t.sentOpen) {
+          t.sentOpen = true;
+          if (now - t.t <= 2 * 3600e3) {
+            const sz = sizeFor({ risk, entry: t.entry, label: 'XAUUSD', mk: inst.def.id });
+            money.push(`SHADOW TEST, no real trade: ${side} XAUUSD · ${t.rule}\nEntry ${fx(t, t.entry)} | SL ${fx(t, t.sl)} | TP1 ${fx(t, t.tp1)} | TP2 ${fx(t, t.tp2)}\nRisk ${Math.round(risk / 0.1)} pips · TP1 ${rr1.toFixed(1)}R · TP2 ${rr2.toFixed(1)}R\n` + (sz ? sz.text + '\n' : '') + `\nChosen by the weekly walk-forward pick. Half off at TP1 then stop to breakeven. Not financial advice.`);
+          }
+        }
+        if (t.net != null && !t.sentClose) { t.sentClose = true; if (t.exitT && now - t.exitT <= 2 * 3600e3) money.push(`SHADOW TEST result: ${side} XAUUSD from ${fx(t, t.entry)} (${t.rule}) closed ${t.net >= 0 ? '+' : ''}${t.net.toFixed(2)}R after costs.`); }
+      }
+      for (const m of money) await tg(m);
+      S0.ref = res[0][1].trades.filter(t => t.t >= S0.start).reduce((a, t) => a + t.net, 0);
+      SH.set(S0); shSay('Updated.'); shadowRender();
+    } catch (e) { shSay('The update failed: ' + (e && e.message ? e.message : 'unknown error')); }
+    finally { shBusy = false; $('#shUpdate').disabled = false; }
+  }
+  $('#shUpdate').onclick = () => shRun(false);
+  // while the page is open: update about 20 seconds after each 5-minute candle closes, so signals reach Telegram fast
+  setInterval(() => { const S0 = SH.get(), g = goldInst(); if (!S0 || shBusy || !live || !g || !g.S) return; const now = Date.now() + (g.clockOff || 0), bar = Math.floor(now / 300000); if (bar !== S0.updBar && now % 300000 > 20000) shRun(true); }, 15000);
+  shadowRender();
   $('#pipThr').oninput = renderPips; $('#histPick').onchange = $('#histShow').onchange = () => { renderHistTrades(); renderPath(); };
   $('#histCsv').onclick = () => {
     const pick = histRes.find(r => r[0] === $('#histPick').value) || histRes[0]; if (!pick) return;
